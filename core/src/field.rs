@@ -45,9 +45,9 @@ const KR: f32 = 300.0;
 const CR: f32 = 10.0;
 
 const RIPPLES: usize = 16;
-const SPEED: f32 = 380.0;
+const SPEED: f32 = 600.0;
 const RADIUS: f32 = 150.0;
-const LIFE: f32 = RADIUS / SPEED + 1.5;
+const LIFE: f32 = RADIUS / SPEED + 0.8;
 
 #[rustfmt::skip]
 const MOJI_WIDE: [char; 32] = [
@@ -216,7 +216,7 @@ pub extern "C" fn field_step(n: u32, dt: f32, t: f32, energy: f32) -> u32 {
                 if local < 0.0 {
                     continue;
                 }
-                let dur = 0.75 + 0.6 * (1.0 - q);
+                let dur = 0.36 + 0.3 * (1.0 - q);
                 let p = local / dur + q * 0.35;
                 if p < phase {
                     phase = p;

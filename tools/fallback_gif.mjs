@@ -1,6 +1,6 @@
-// tools/fallback_gif.mjs — renders the logo surface once through the real
-// kernel and writes it as site/img/metiq_logo.gif, the image shown when
-// JavaScript or WebAssembly is unavailable. The kernel already emits only
+// tools/fallback_gif.mjs — renders the still surfaces (logo, medal) once
+// through the real kernel and writes them as GIFs under site/img/, the images
+// shown when JavaScript or WebAssembly is unavailable. The kernel already emits only
 // web-safe colours with 1-bit alpha, so the frame maps losslessly onto a GIF
 // palette; the LZW encoder below is the plain GIF89a variable-width one.
 //
@@ -12,9 +12,19 @@ const root = new URL('../', import.meta.url);
 const { instance } = await WebAssembly.instantiate(readFileSync(new URL('site/wasm/metiq_core.wasm', root)), {});
 const x = instance.exports;
 x.init(1);
-const w = x.logo_w();
-const h = x.logo_h();
-const rgba = new Uint8Array(x.memory.buffer, x.logo_render(0, 0, 0, 0), w * h * 4);
+
+const SURFACES = [
+  ['metiq_logo.gif', x.logo_w, x.logo_h, x.logo_render],
+  ['badge_10th.gif', x.badge_w, x.badge_h, x.badge_render],
+];
+
+for (const [file, fw, fh, render] of SURFACES) {
+  const w = fw();
+  const h = fh();
+  writeGif(file, w, h, new Uint8Array(x.memory.buffer, render(0, 0, 0, 0), w * h * 4));
+}
+
+function writeGif(file, w, h, rgba) {
 
 // palette: index 0 = transparent, then every distinct opaque colour
 const index = new Map();
@@ -99,6 +109,6 @@ for (let i = 0; i < lz.length; i += 255) {
 }
 bytes.push(0, 0x3b);
 
-const out = new URL('site/img/metiq_logo.gif', root);
-writeFileSync(out, Buffer.from(bytes));
-console.log(`site/img/metiq_logo.gif: ${w}x${h}, ${pal.length - 1} colours + transparency, ${bytes.length} bytes`);
+writeFileSync(new URL(`site/img/${file}`, root), Buffer.from(bytes));
+console.log(`site/img/${file}: ${w}x${h}, ${pal.length - 1} colours + transparency, ${bytes.length} bytes`);
+}

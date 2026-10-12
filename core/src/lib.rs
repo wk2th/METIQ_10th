@@ -20,6 +20,7 @@
 //! * [`globe`]    – ray-cast, ordered-dithered spinning globe w/ satellite
 //! * [`sign`]     – "UNDER CONSTRUCTION" barrier tape
 //! * [`logo`]     – SDF-rendered METIQ mark that turns on its apex axis
+//! * [`badge`]    – gaudy gold 10th ANNIVERSARY medal
 //! * [`banner`]   – 88x31 link banner with specular sweep
 //! * [`rainbow`]  – the obligatory rainbow `<HR>`
 //! * [`texture`]  – seamless BACKGROUND= tile
@@ -42,6 +43,7 @@ mod odometer;
 mod globe;
 mod sign;
 mod banner;
+mod badge;
 mod logo;
 mod logo_data;
 mod rainbow;

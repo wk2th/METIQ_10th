@@ -7,6 +7,7 @@
 
 const SPECS = {
   logo:    (x) => ({ w: x.logo_w(),      h: x.logo_h(),     render: x.logo_render }),
+  badge:   (x) => ({ w: x.badge_w(),     h: x.badge_h(),    render: x.badge_render }),
   globe:   (x) => ({ w: x.globe_size(),  h: x.globe_size(), render: x.globe_render }),
   counter: (x) => ({ w: x.odo_w(),       h: x.odo_h(),      render: x.odo_render }),
   sign:    (x) => ({ w: x.sign_w(),      h: x.sign_h(),     render: x.sign_render, scale: 2 }),

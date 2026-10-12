@@ -155,11 +155,6 @@ async function main() {
   const lm = $('#lastmod');
   if (lm) lm.textContent = new Date(document.lastModified).toLocaleDateString('ja-JP');
 
-  $('#bbs')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    $('#bbs-msg')?.removeAttribute('hidden');
-  });
-
   console.log(
     '%c METIQ %c rendering kernel 0x%s · %d glyphs · simd128 ',
     'background:#000080;color:#ff0;font:bold 14px serif',
