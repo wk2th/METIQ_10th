@@ -1,0 +1,11 @@
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+# simd128: CRT noise is generated 4 lanes at a time.
+# bulk-memory / nontrapping-fptoint: cheaper fills and float->int casts.
+rustflags = [
+  "-C", "target-feature=+simd128,+bulk-memory,+nontrapping-fptoint,+sign-ext",
+  "-C", "link-arg=--export-table",
+  "-C", "link-arg=-zstack-size=65536",
+]

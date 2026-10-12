@@ -1,0 +1,206 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<!--
+ ============================================================================
+   METIQ OFFICIAL HOME PAGE                                 since 2026.10.12
+ ============================================================================
+
+   Yes, that DOCTYPE is on purpose. This document renders in quirks mode,
+   uses <FONT>, <CENTER>, <MARQUEE>, <BLINK>, BGCOLOR= and table layout, and
+   with JavaScript off it is exactly what it looks like.
+
+   With JavaScript on, nothing you see moving is CSS or a GIF:
+
+   +------------------------------------------------------------------------+
+   |  metiq_core.wasm   47 KB · Rust #![no_std] · no allocator · no bindgen  |
+   |                    all state in .bss, memory never grows, so JS holds   |
+   |                    ImageData that aliases linear memory (zero copy)     |
+   |                                                                         |
+   |  field     ~1-4k damped springs, one per grapheme (Intl.Segmenter)      |
+   |            target = noise tremble + (1-d/R)^2 repel + hover wave        |
+   |            emits only dirty indices; idle glyphs carry no transform     |
+   |  crt       noise via 4-lane xorshift32 in a v128 (simd128), scanlines,  |
+   |            VHS hum bar, tear bands                                      |
+   |  odometer  carry-propagating drum: w_i(c)=floor(c/10^i)%10              |
+   |                                    +max(0,(c%10^i)-(10^i-1))            |
+   |  globe     analytic ray/sphere, 3-D fBm continents, Blinn spec,         |
+   |            atan2/asin graticule, Bayer 4x4 -> 216-colour cube,          |
+   |            snaps to 24 frames @ 12.5fps when idle (GIF emulation)       |
+   |  synth     AudioWorklet runs a *second* instance: pulse lead,           |
+   |            16-step triangle bass, 15-bit LFSR drums                     |
+   |  math      no libm: Bhaskara-style sin, exponent-injection exp2,        |
+   |            0x5f3759df rsqrt, octant atan2                               |
+   +------------------------------------------------------------------------+
+
+   Every non-1996 effect is scaled by one envelope driven by pointer motion
+   and decays to exactly zero within ~2s of stillness. PrintScreen, Cmd+Shift,
+   Win+Shift, window blur, tab hide and print all force it to zero
+   synchronously. Take a screenshot: you get a 1996 home page.
+
+   Source: core/ (Rust) and site/js/ (ES modules). Build: ./build.sh
+ ============================================================================
+-->
+<HTML LANG="ja">
+<HEAD>
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+<META NAME="viewport" CONTENT="width=680">
+<META NAME="description" CONTENT="METIQ 公式ホームページ">
+<META NAME="generator" CONTENT="metiq_core 0x19961012">
+<TITLE>★METIQ 公式ホームページ★</TITLE>
+<LINK REL="icon" HREF="data:,">
+<LINK REL="stylesheet" HREF="css/metiq.css">
+<LINK REL="modulepreload" HREF="js/boot.mjs">
+<LINK REL="preload" HREF="wasm/metiq_core.wasm" AS="fetch" CROSSORIGIN>
+<SCRIPT TYPE="module" SRC="js/boot.mjs"></SCRIPT>
+</HEAD>
+
+<BODY BGCOLOR="#DCDCDC" TEXT="#000000" LINK="#0000EE" VLINK="#551A8B" ALINK="#FF0000">
+<A NAME="top"></A>
+<CENTER>
+
+<TABLE WIDTH="640" BORDER="0" CELLPADDING="2" CELLSPACING="0" BGCOLOR="#000080">
+<TR><TD>
+<MARQUEE SCROLLAMOUNT="4" SCROLLDELAY="60"><FONT COLOR="#FFFF00"><B>★☆★ ようこそ！ METIQ 公式ホームページへ ★☆★ 当ページはリンクフリーです ★☆★ キリ番を踏んだ方はゲストブックに書き込んでね！ ★☆★</B></FONT></MARQUEE>
+</TD></TR>
+</TABLE>
+
+<BR>
+
+<TABLE WIDTH="640" BORDER="0" CELLPADDING="0" CELLSPACING="0">
+<TR>
+<TD WIDTH="100" ALIGN="CENTER" VALIGN="MIDDLE"><CANVAS DATA-SURFACE="globe" TITLE="ドラッグで回るよ"></CANVAS></TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" DATA-FX="title">
+<FONT SIZE="7" FACE="Times New Roman,Times,serif"><B><I><FONT COLOR="#FF0000">M</FONT><FONT COLOR="#FF8C00">E</FONT><FONT COLOR="#DAA520">T</FONT><FONT COLOR="#008000">I</FONT><FONT COLOR="#0000FF">Q</FONT></I></B></FONT><BR>
+<FONT SIZE="3" COLOR="#000080"><B>～ OFFICIAL HOME PAGE ～</B></FONT>
+</TD>
+<TD WIDTH="100" ALIGN="CENTER" VALIGN="MIDDLE"><FONT SIZE="2" COLOR="#808080">Since<BR>2026.10.12</FONT></TD>
+</TR>
+</TABLE>
+
+<CANVAS DATA-SURFACE="rainbow"></CANVAS>
+
+<P>
+<FONT SIZE="3">ようこそ！ <B>METIQ</B> 公式ホームページへ。</FONT><BR>
+<FONT SIZE="3">あなたは</FONT>
+<!-- data-endpoint="https://…" を付けると、その URL の {"count": n} を表示します -->
+<CANVAS ID="counter" DATA-SURFACE="counter" DATA-BASE="0"></CANVAS>
+<FONT SIZE="3">人目のお客様です。</FONT>
+</P>
+
+<P ID="kiriban" HIDDEN>
+<FONT COLOR="#FF0000" SIZE="4"><B><BLINK>☆★ キリ番ゲット！おめでとうございます ★☆</BLINK></B></FONT><BR>
+<FONT SIZE="2">ゲストブックにご報告ください！</FONT>
+</P>
+
+<CANVAS DATA-SURFACE="sign" TITLE="工事中"></CANVAS><BR>
+<FONT SIZE="2" COLOR="#FF0000">※ このページは現在工事中です。ご迷惑をおかけします m(_ _)m</FONT>
+
+<P>
+<TABLE BORDER="2" CELLPADDING="4" CELLSPACING="2" BGCOLOR="#FFFFCC">
+<TR>
+<TD ALIGN="CENTER"><A HREF="#news"><B>新着情報</B></A></TD>
+<TD ALIGN="CENTER"><A HREF="#about"><B>METIQとは</B></A></TD>
+<TD ALIGN="CENTER"><A HREF="#service"><B>製品・サービス</B></A></TD>
+<TD ALIGN="CENTER"><A HREF="#links"><B>リンク集</B></A></TD>
+<TD ALIGN="CENTER"><A HREF="#bbs"><B>ゲストブック</B></A></TD>
+</TR>
+</TABLE>
+</P>
+
+<HR WIDTH="640" SIZE="3">
+
+<!-- ▼▼▼ ここから下の本文を編集してください ▼▼▼ -->
+
+<TABLE WIDTH="640" BORDER="0" CELLPADDING="4" CELLSPACING="0">
+<TR><TD>
+<A NAME="news"></A>
+<FONT COLOR="#800000" SIZE="4"><B>■ 新着情報 ■</B></FONT>
+<TABLE WIDTH="100%" BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#FFFFFF">
+<TR><TD WIDTH="110" NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">「METIQ 公式ホームページ」を開設しました！ <FONT COLOR="#FF0000"><B><BLINK>NEW!</BLINK></B></FONT></FONT></TD></TR>
+<TR><TD NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">アクセスカウンターを設置しました。</FONT></TD></TR>
+<TR><TD NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">ゲストブックを設置しました。お気軽に書き込んでください。</FONT></TD></TR>
+</TABLE>
+</TD></TR>
+</TABLE>
+
+<HR WIDTH="640" SIZE="3">
+
+<TABLE WIDTH="640" BORDER="0" CELLPADDING="4" CELLSPACING="0">
+<TR><TD>
+<A NAME="about"></A>
+<FONT COLOR="#800000" SIZE="4"><B>■ METIQとは ■</B></FONT>
+<BLOCKQUOTE>
+<FONT SIZE="3">ただいま準備中です。もうしばらくお待ちください。</FONT>
+</BLOCKQUOTE>
+</TD></TR>
+<TR><TD>
+<A NAME="service"></A>
+<FONT COLOR="#800000" SIZE="4"><B>■ 製品・サービス ■</B></FONT>
+<BLOCKQUOTE>
+<FONT SIZE="3">ただいま準備中です。もうしばらくお待ちください。</FONT>
+</BLOCKQUOTE>
+</TD></TR>
+</TABLE>
+
+<!-- ▲▲▲ ここまで ▲▲▲ -->
+
+<CANVAS DATA-SURFACE="rainbow"></CANVAS>
+
+<TABLE WIDTH="640" BORDER="0" CELLPADDING="4" CELLSPACING="0">
+<TR><TD>
+<A NAME="links"></A>
+<FONT COLOR="#800000" SIZE="4"><B>■ リンク集 ■</B></FONT>
+<BLOCKQUOTE>
+<FONT SIZE="3">相互リンク募集中です！ 当ページはリンクフリーです。<BR>
+バナーはこちらをお使いください（お持ち帰りOK）。</FONT><BR><BR>
+<A HREF="./"><CANVAS DATA-SURFACE="banner" TITLE="METIQ OFFICIAL SITE"></CANVAS></A>
+</BLOCKQUOTE>
+</TD></TR>
+</TABLE>
+
+<HR WIDTH="640" SIZE="3">
+
+<TABLE WIDTH="640" BORDER="0" CELLPADDING="4" CELLSPACING="0">
+<TR><TD>
+<A NAME="bbs"></A>
+<FONT COLOR="#800000" SIZE="4"><B>■ ゲストブック ■</B></FONT>
+<FORM ID="bbs" ACTION="#" METHOD="POST">
+<TABLE BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#E0E0FF">
+<TR><TD NOWRAP><FONT SIZE="2">おなまえ</FONT></TD><TD><INPUT TYPE="text" NAME="name" SIZE="30"></TD></TR>
+<TR><TD NOWRAP><FONT SIZE="2">メッセージ</FONT></TD><TD><TEXTAREA NAME="msg" ROWS="4" COLS="44"></TEXTAREA></TD></TR>
+<TR><TD COLSPAN="2" ALIGN="CENTER"><BUTTON TYPE="submit">書き込む</BUTTON> <BUTTON TYPE="reset">リセット</BUTTON></TD></TR>
+</TABLE>
+</FORM>
+</TD></TR>
+</TABLE>
+
+<HR WIDTH="640" SIZE="3">
+
+<TABLE ID="jukebox" BORDER="2" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#C0C0C0">
+<TR>
+<TD NOWRAP><FONT SIZE="2">♪ BGM: <B>metiq_theme.mid</B></FONT></TD>
+<TD NOWRAP><BUTTON TYPE="button" DATA-ACT="play">▶ 再生</BUTTON> <BUTTON TYPE="button" DATA-ACT="stop">■ 停止</BUTTON></TD>
+<TD NOWRAP><FONT SIZE="2" FACE="Courier New,monospace"><SPAN DATA-TIME DATA-FX="none">00:00</SPAN> [<SPAN DATA-STATE DATA-FX="none">停止</SPAN>]</FONT></TD>
+</TR>
+</TABLE>
+<FONT SIZE="1" COLOR="#808080">※ 音が出ます。ボリュームにご注意ください。</FONT>
+
+<P>
+<CANVAS DATA-SURFACE="rainbow"></CANVAS><BR>
+<FONT SIZE="2">
+このホームページは <B>Netscape Navigator 3.0</B> / <B>Internet Explorer 3.0</B> 以上<BR>
+画面サイズ <B>800×600</B>・<B>256色</B> 以上でご覧ください。<BR>
+<NOSCRIPT><FONT COLOR="#FF0000">JavaScript を ON にしてご覧ください。</FONT><BR></NOSCRIPT>
+</FONT>
+</P>
+
+<P>
+<FONT SIZE="2">
+<A HREF="#top">▲ ページのトップへ</A><BR><BR>
+最終更新日: <SPAN ID="lastmod" DATA-FX="none">2026/10/12</SPAN><BR>
+Copyright &copy; 2026 METIQ. All Rights Reserved.
+</FONT>
+</P>
+
+</CENTER>
+</BODY>
+</HTML>

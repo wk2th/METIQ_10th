@@ -1,0 +1,46 @@
+/* metiq.css — almost nothing here is about looks; the looks are in the
+   HTML 3.2 attributes. This file only keeps the split text pixel-identical
+   to the unsplit text, and declares the two overlay layers. */
+
+body {
+  margin: 8px;
+  font-family: "ＭＳ Ｐゴシック", "MS PGothic", "Osaka", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+}
+
+.g { display: inline-block; }
+.w { white-space: nowrap; }
+
+/* decorations do not propagate into atomic inlines */
+a[href] .g { text-decoration: underline; }
+
+blink { animation: blink 1s steps(1, end) infinite; }
+@keyframes blink { 50% { visibility: hidden; } }
+
+canvas[data-surface] {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  vertical-align: middle;
+}
+canvas[data-surface="globe"] { cursor: grab; }
+canvas[data-surface="globe"]:active { cursor: grabbing; }
+
+#crt, #sparks {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+#crt { width: 100vw; height: 100vh; image-rendering: pixelated; }
+#crt[hidden], #sparks[hidden] { display: none; }
+
+.glitch .g { text-shadow: 2px 0 rgb(255 0 0 / .6), -2px 0 rgb(0 255 255 / .6); }
+
+@media print {
+  #crt, #sparks { display: none !important; }
+  .g { translate: none !important; rotate: none !important; text-shadow: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  blink { animation: none; }
+  marquee { display: block; }
+}
