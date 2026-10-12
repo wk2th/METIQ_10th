@@ -61,7 +61,7 @@ python3 -m http.server -d site   # http://localhost:8000
 ## カスタマイズ
 
 - **本文**: `site/index.html` の「▼▼▼ ここから下の本文を編集してください ▼▼▼」の範囲。
-  現在は「準備中」のプレースホルダーです。
+  現在は「METIQ は高IQ団体です」以外は「準備中」のプレースホルダーです。
 - **アクセスカウンター**: 本物のカウントにはサーバーが必要です。現状はブラウザごとの
   訪問回数 (`localStorage`) + `DATA-BASE` の値を表示します。`#counter` に
   `DATA-ENDPOINT="https://..."` を付けると、その URL に POST して返ってきた
