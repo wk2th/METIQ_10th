@@ -11,13 +11,16 @@
    With JavaScript on, nothing you see moving is CSS or a GIF:
 
    +------------------------------------------------------------------------+
-   |  metiq_core.wasm   67 KB · Rust #![no_std] · no allocator · no bindgen  |
+   |  metiq_core.wasm   74 KB · Rust #![no_std] · no allocator · no bindgen  |
    |                    all state in .bss, memory never grows, so JS holds   |
    |                    ImageData that aliases linear memory (zero copy)     |
    |                                                                         |
    |  field     ~1-4k damped springs, one per grapheme (Intl.Segmenter)      |
-   |            hover = expanding ripple; each glyph it crosses is decoded   |
-   |            mojibake -> greek -> maths -> truth, re-rolled at 24 Hz      |
+   |            hover = noise-warped spread (per-ripple lobes, page warp,    |
+   |            strays); each glyph hit decodes mojibake -> greek -> maths   |
+   |            -> truth, candidate re-rolled at 24 Hz                       |
+   |  collapse  ~1/min a table cracks from a random cell, falls ballisti-  |
+   |            cally as mojibake, then seeps back from behind the page     |
    |            emits only dirty indices; idle glyphs carry no transform     |
    |  logo      the mark is not an image: two traced polygons evaluated as   |
    |            an exact signed distance field per pixel -> AA, halo and    |

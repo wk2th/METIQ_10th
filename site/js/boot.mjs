@@ -6,10 +6,12 @@
 //                                          ├─► crt_render   (noise overlay)
 //                                          ├─► *_render     (GIF surfaces)
 //                                          └─► fx_glitch    (tear events)
+//   ~1/min ──► shard_*        (a table falls apart, seeps back, re-decodes)
 //   capture precursor ──► fx_calm + DOM reset, synchronously
 
 import { boot } from './kernel.mjs';
 import { GlyphField } from './glyphs.mjs';
+import { Collapse } from './collapse.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
@@ -50,6 +52,7 @@ async function main() {
 
   installBackground(k);
   const field = new GlyphField(k, document.body);
+  const collapse = new Collapse(k, field);
   const { list: surfaces, byName } = mountSurfaces(k);
   const overlay = new Overlay(k);
 
@@ -66,6 +69,7 @@ async function main() {
 
   const calm = () => {
     x.fx_calm(2.5);
+    collapse.restore();
     field.calm();
     overlay.calm();
     document.body.classList.remove('glitch');
@@ -144,6 +148,7 @@ async function main() {
     }
     wasGlitch = glitch;
 
+    if (!reduced.matches) collapse.step(t);
     field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);

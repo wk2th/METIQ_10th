@@ -106,14 +106,22 @@ export class GlyphField {
     }
   }
 
-  /** Pointer touched a glyph element: start a decode ripple centred on it. */
+  /**
+   * Pointer touched a glyph element: start a decode ripple centred on it —
+   * but only once the pointer has travelled a few characters from the last
+   * impact, so reading along a line doesn't keep scrambling it.
+   */
   touch(el) {
     const i = this.index.get(el);
     if (i === undefined || this.inp[i * IN + 2] === 3) return false;
-    if (i === this.lastTouch && this.t - this.lastTouchT < 0.6) return false;
-    this.lastTouch = i;
-    this.lastTouchT = this.t;
-    this.k.x.field_ripple(this.inp[i * IN], this.inp[i * IN + 1], this.t);
+    const x = this.inp[i * IN];
+    const y = this.inp[i * IN + 1];
+    if (this.last) {
+      const reach = Math.max(56, this.box[i * 2] * 3.5);
+      if (Math.hypot(x - this.last.x, y - this.last.y) < reach) return false;
+    }
+    this.last = { x, y };
+    this.k.x.field_ripple(x, y, this.t);
     return true;
   }
 

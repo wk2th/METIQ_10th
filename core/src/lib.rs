@@ -14,7 +14,8 @@
 //!
 //! Subsystems
 //! ----------
-//! * [`field`]    – per-glyph spring field (tremble / repel / wave)
+//! * [`field`]    – per-glyph springs and the mojibake decode ripples
+//! * [`collapse`] – a table falls apart and seeps back from behind the page
 //! * [`crt`]      – SIMD signal noise, scanlines, tear bands
 //! * [`odometer`] – the access counter (true carry-propagating drum)
 //! * [`globe`]    – ray-cast, ordered-dithered spinning globe w/ satellite
@@ -38,6 +39,7 @@ mod font;
 
 mod fx;
 mod field;
+mod collapse;
 mod crt;
 mod odometer;
 mod globe;
