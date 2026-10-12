@@ -169,7 +169,7 @@ async function main() {
 
   $('#bbs')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    alert('ゲストブックは現在準備中です。\nもうしばらくお待ちください m(_ _)m');
+    $('#bbs-msg')?.removeAttribute('hidden');
   });
 
   console.log(
