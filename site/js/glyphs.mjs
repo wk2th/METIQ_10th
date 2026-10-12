@@ -1,5 +1,5 @@
 // glyphs.mjs — splits the document's text into per-grapheme inline-blocks and
-// drives them from the wasm spring field.
+// drives them from the wasm glyph field (springs + decode ripples).
 //
 // Layout rules we have to respect so a still frame is pixel-identical to the
 // unsplit page:
@@ -8,12 +8,15 @@
 //     (inline-blocks are each a break opportunity); CJK keeps per-glyph breaks
 //   * text-decoration does not propagate into atomic inlines, so links get
 //     their underline re-applied per glyph in CSS
-//   * we only ever write the individual `translate` / `rotate` properties and
-//     clear them to '' at rest, so an idle glyph has no transform at all
+//   * a glyph showing a substitute codepoint is pinned to its measured box, so
+//     a ripple of corrupted text never reflows a single line
+//   * we only ever write `translate` / `rotate` and clear them to '' at rest,
+//     so an idle glyph carries no transform and no substitute at all
 
 const SKIP = 'script,style,textarea,select,option,canvas,noscript,input,[data-fx="none"]';
+const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦　-〿☀-➿]/u;
 const CJK = /[⺀-鿿豈-﫿＀-￯　-〿]/u;
-const IN = 5;
+const IN = 4;
 const OUT = 4;
 
 export class GlyphField {
@@ -22,10 +25,15 @@ export class GlyphField {
     this.cap = k.x.field_cap();
     this.inp = k.f32(k.x.field_in(), this.cap * IN);
     this.out = k.f32(k.x.field_out(), this.cap * OUT);
+    this.codes = k.u32(k.x.field_codes(), this.cap);
     this.dirty = k.u32(k.x.field_dirty(), this.cap);
     this.els = [];
+    this.text = [];
+    this.index = new Map();
     this.applied = new Float32Array(this.cap * 2);
-    this.groups = new Map();
+    this.box = new Float32Array(this.cap * 2);
+    this.shown = new Uint32Array(this.cap);
+    this.t = 0;
     this.split(root);
     this.measure();
   }
@@ -35,13 +43,6 @@ export class GlyphField {
     if (el.closest('marquee')) return 3;
     if (el.closest('a[href],button')) return 1;
     return 0;
-  }
-
-  groupOf(el) {
-    const host = el.closest('a[href],button,[data-fx]');
-    if (!host) return -1;
-    if (!this.groups.has(host)) this.groups.set(host, { id: this.groups.size, n: 0 });
-    return this.groups.get(host);
   }
 
   split(root) {
@@ -55,9 +56,7 @@ export class GlyphField {
 
     for (const node of nodes) {
       if (this.els.length >= this.cap) break;
-      const parent = node.parentElement;
-      const kind = this.kindOf(parent);
-      const group = this.groupOf(parent);
+      const kind = this.kindOf(node.parentElement);
       const frag = document.createDocumentFragment();
       let latin = null;
 
@@ -83,9 +82,10 @@ export class GlyphField {
         }
         const i = this.els.length;
         this.els.push(g);
-        this.inp[i * IN + 2] = group === -1 ? -1 : group.id;
-        this.inp[i * IN + 3] = kind;
-        this.inp[i * IN + 4] = group === -1 ? 0 : group.n++;
+        this.text.push(s);
+        this.index.set(g, i);
+        this.inp[i * IN + 2] = kind;
+        this.inp[i * IN + 3] = WIDE.test(s) ? 1 : 0;
       }
       node.replaceWith(frag);
     }
@@ -97,26 +97,55 @@ export class GlyphField {
     const sx = scrollX;
     const sy = scrollY;
     for (let i = 0; i < this.n; i++) {
+      if (this.shown[i]) continue; // pinned glyph: keep the box it had
       const r = this.els[i].getBoundingClientRect();
       this.inp[i * IN] = r.left + r.width / 2 + sx - this.applied[i * 2];
       this.inp[i * IN + 1] = r.top + r.height / 2 + sy - this.applied[i * 2 + 1];
+      this.box[i * 2] = r.width;
+      this.box[i * 2 + 1] = r.height;
     }
   }
 
-  hotGroup(target) {
-    const host = target?.closest?.('a[href],button,[data-fx]');
-    return host && this.groups.has(host) ? this.groups.get(host).id : -1;
+  /** Pointer touched a glyph element: start a decode ripple centred on it. */
+  touch(el) {
+    const i = this.index.get(el);
+    if (i === undefined || this.inp[i * IN + 2] === 3) return false;
+    if (i === this.lastTouch && this.t - this.lastTouchT < 0.6) return false;
+    this.lastTouch = i;
+    this.lastTouchT = this.t;
+    this.k.x.field_ripple(this.inp[i * IN], this.inp[i * IN + 1], this.t);
+    return true;
   }
 
-  step(dt, t, energy, mx, my, hot) {
-    const nd = this.k.x.field_step(this.n, dt, t, mx, my, energy, hot);
-    const { out, dirty, els, applied } = this;
+  step(dt, t, energy) {
+    this.t = t;
+    const nd = this.k.x.field_step(this.n, dt, t, energy);
+    const { out, codes, shown, dirty, els, applied } = this;
     for (let k = 0; k < nd; k++) {
       const i = dirty[k];
+      const el = els[i];
+      const s = el.style;
+
+      const code = codes[i];
+      if (code !== shown[i]) {
+        if (code) {
+          if (!shown[i]) {
+            s.width = `${this.box[i * 2]}px`;
+            s.height = `${this.box[i * 2 + 1]}px`;
+            el.classList.add('z');
+          }
+          el.textContent = String.fromCodePoint(code);
+        } else {
+          el.textContent = this.text[i];
+          s.width = s.height = '';
+          el.classList.remove('z');
+        }
+        shown[i] = code;
+      }
+
       const o = i * OUT;
       const dx = out[o];
       const dy = out[o + 1];
-      const s = els[i].style;
       applied[i * 2] = dx;
       applied[i * 2 + 1] = dy;
       if (dx === 0 && dy === 0 && out[o + 2] === 0) {
@@ -134,6 +163,16 @@ export class GlyphField {
   calm() {
     this.k.x.field_reset();
     this.applied.fill(0);
-    for (const el of this.els) el.style.translate = el.style.rotate = el.style.textShadow = '';
+    for (let i = 0; i < this.n; i++) {
+      const el = this.els[i];
+      const s = el.style;
+      s.translate = s.rotate = s.textShadow = '';
+      if (this.shown[i]) {
+        el.textContent = this.text[i];
+        s.width = s.height = '';
+        el.classList.remove('z');
+        this.shown[i] = 0;
+      }
+    }
   }
 }

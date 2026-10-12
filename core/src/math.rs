@@ -93,12 +93,6 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-#[inline(always)]
-pub fn smooth(x: f32) -> f32 {
-    let x = sat(x);
-    x * x * (3.0 - 2.0 * x)
-}
-
 /// `1/sqrt(x)` – the 0x5f3759df trick, one Newton step (rel. err < 0.18%).
 #[inline(always)]
 pub fn rsqrt(x: f32) -> f32 {

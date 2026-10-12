@@ -11,12 +11,13 @@
    With JavaScript on, nothing you see moving is CSS or a GIF:
 
    +------------------------------------------------------------------------+
-   |  metiq_core.wasm   54 KB · Rust #![no_std] · no allocator · no bindgen  |
+   |  metiq_core.wasm   60 KB · Rust #![no_std] · no allocator · no bindgen  |
    |                    all state in .bss, memory never grows, so JS holds   |
    |                    ImageData that aliases linear memory (zero copy)     |
    |                                                                         |
    |  field     ~1-4k damped springs, one per grapheme (Intl.Segmenter)      |
-   |            target = noise tremble + (1-d/R)^2 repel + hover wave        |
+   |            hover = expanding ripple; each glyph it crosses is decoded   |
+   |            mojibake -> greek -> maths -> truth, re-rolled at 24 Hz      |
    |            emits only dirty indices; idle glyphs carry no transform     |
    |  logo      the mark is not an image: two traced polygons evaluated as   |
    |            an exact signed distance field per pixel -> AA, halo and    |
@@ -28,8 +29,6 @@
    |  globe     analytic ray/sphere, 3-D fBm continents, Blinn spec,         |
    |            atan2/asin graticule, Bayer 4x4 -> 216-colour cube,          |
    |            snaps to 24 frames @ 12.5fps when idle (GIF emulation)       |
-   |  synth     AudioWorklet runs a *second* instance: pulse lead,           |
-   |            16-step triangle bass, 15-bit LFSR drums                     |
    |  math      no libm: Bhaskara-style sin, exponent-injection exp2,        |
    |            0x5f3759df rsqrt, octant atan2                               |
    +------------------------------------------------------------------------+
@@ -198,15 +197,6 @@
 </TABLE>
 
 <HR WIDTH="640" SIZE="3">
-
-<TABLE ID="jukebox" BORDER="2" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#C0C0C0">
-<TR>
-<TD NOWRAP><FONT SIZE="2">♪ BGM: <B>metiq_theme.mid</B></FONT></TD>
-<TD NOWRAP><BUTTON TYPE="button" DATA-ACT="play">▶ 再生</BUTTON> <BUTTON TYPE="button" DATA-ACT="stop">■ 停止</BUTTON></TD>
-<TD NOWRAP><FONT SIZE="2" FACE="Courier New,monospace"><SPAN DATA-TIME DATA-FX="none">00:00</SPAN> [<SPAN DATA-STATE DATA-FX="none">停止</SPAN>]</FONT></TD>
-</TR>
-</TABLE>
-<FONT SIZE="1" COLOR="#808080">※ 音が出ます。ボリュームにご注意ください。</FONT>
 
 <P>
 <CANVAS DATA-SURFACE="rainbow"></CANVAS><BR>

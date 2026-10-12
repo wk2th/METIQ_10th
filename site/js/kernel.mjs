@@ -8,7 +8,7 @@
 const BUILD = 0x19961012;
 export const WASM_URL = new URL('../wasm/metiq_core.wasm', import.meta.url);
 
-/** @returns {Promise<{x: WebAssembly.Exports & Record<string, Function>, bytes: ArrayBuffer, pixels: Function, f32: Function, u32: Function}>} */
+/** @returns {Promise<{x: WebAssembly.Exports & Record<string, Function>, pixels: Function, f32: Function, u32: Function}>} */
 export async function boot() {
   const res = await fetch(WASM_URL, { cache: 'force-cache' });
   if (!res.ok) throw new Error(`metiq_core.wasm: HTTP ${res.status}`);
@@ -22,7 +22,6 @@ export async function boot() {
   const mem = () => x.memory.buffer;
   return {
     x,
-    bytes,
     pixels: (ptr, w, h) => new ImageData(new Uint8ClampedArray(mem(), ptr, w * h * 4), w, h),
     f32: (ptr, len) => new Float32Array(mem(), ptr, len),
     u32: (ptr, len) => new Uint32Array(mem(), ptr, len),

@@ -24,7 +24,6 @@
 //! * [`rainbow`]  – the obligatory rainbow `<HR>`
 //! * [`texture`]  – seamless BACKGROUND= tile
 //! * [`spark`]    – cursor trail particles
-//! * [`synth`]    – 3-voice + LFSR-noise chiptune for the "MIDI" player
 //! * [`fx`]       – global energy envelope, glitch scheduler, calm switch
 
 #![no_std]
@@ -48,7 +47,6 @@ mod logo_data;
 mod rainbow;
 mod texture;
 mod spark;
-mod synth;
 
 use core::cell::UnsafeCell;
 

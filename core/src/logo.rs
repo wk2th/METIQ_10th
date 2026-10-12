@@ -1,35 +1,28 @@
-//! The METIQ logo, drawn analytically.
+//! The METIQ logo, drawn analytically – shape only, on a transparent ground.
 //!
 //! The triangle mark is not a bitmap: it is the difference of two polygons
 //! traced from the master artwork (IoU 0.975 against it), evaluated per pixel
-//! as an exact signed distance field (Quílez' winding-number sdPolygon). One
-//! SDF gives us, for free:
+//! as an exact signed distance field (Quílez' winding-number sdPolygon). From
+//! that one d(p) we get:
 //!
-//!   * resolution-independent anti-aliasing  (coverage = ½ − d/px)
-//!   * the soft halo of the original           (glow = e^(−d/r))
-//!   * a 3-D turn about the apex axis          (pre-divide x by cos θ)
+//!   * coverage, turned into 1-bit GIF alpha by ordered dithering
+//!   * a chiselled bevel: the SDF gradient is the outward normal, lit from
+//!     the upper left like every 1996 "Bevel and Emboss"
+//!   * a 3-D turn about the apex axis (pre-divide x by cos θ)
+//!   * the drop shadow (the same field sampled 2px up-left)
 //!
-//! The wordmark *is* baked (4-bit coverage, see tools/logo2rs.py) because it
-//! is set in a typeface we cannot ship. Background is the original's slate →
-//! sage gradient, ordered-dithered to the 216 cube like a 1996 GIF would be.
+//! The wordmark is baked coverage (tools/logo2rs.py), since its typeface
+//! cannot ship. Fill is the brand slate, dithered into the 216 cube.
 //!
 //! Idle: static, plus an apex glint every few seconds at GIF frame rate.
 //! Hover: the mark turns on its axis with a specular sweep; on leave it
 //! completes the revolution and lands exactly face-on.
 
-use crate::logo_data::{WM, WM_H, WM_W, WM_X, WM_Y};
-use crate::math::{abs, ceil_div, clamp, damp, exp, floor, lerp, max, min, sat, sqrt, TAU};
-use crate::palette::put;
+use crate::logo_data::{AXIS, H, S, SHADOW, SX0, SY0, W, WM, WM_H, WM_W, WM_X, WM_Y};
+use crate::math::{abs, ceil_div, clamp, cos, damp, floor, lerp, max, min, sat, sin, sqrt, TAU};
+use crate::palette::{bayer, clear, put};
 use crate::rng::hash32;
 use crate::Slot;
-
-pub const W: usize = 240;
-pub const H: usize = 124;
-
-/// Source artwork px per surface px.
-const S: f32 = 767.0 / 240.0;
-/// Rotation axis (source x of the apex).
-const AXIS: f32 = 414.4;
 
 const TRI: [(f32, f32); 3] = [(414.4, 76.55), (726.8, 282.5), (103.2, 282.5)];
 
@@ -47,6 +40,10 @@ const CUT: [(f32, f32); 10] = [
     (418.5, 162.5),
     (356.0, 162.5),
 ];
+
+/// Light from the upper left, image coordinates (y down), unit length.
+const LIGHT: (f32, f32) = (-0.6, -0.8);
+const BEVEL: f32 = 2.4 * S;
 
 static BUF: Slot<[u8; W * H * 4]> = Slot::new([0; W * H * 4]);
 
@@ -104,6 +101,30 @@ fn wordmark(x: i32, y: i32) -> f32 {
     q as f32 * (1.0 / 15.0)
 }
 
+/// Turn state shared by every sample in a frame.
+#[derive(Clone, Copy)]
+struct View {
+    ac: f32,
+    sign: f32,
+    aa: f32,
+}
+
+impl View {
+    /// Surface pixel → (distance, source-space x, source-space y) of the mark.
+    #[inline]
+    fn sample(&self, x: i32, y: i32) -> (f32, f32, f32) {
+        let sx = (x as f32 + 0.5) * S + SX0;
+        let sy = (y as f32 + 0.5) * S + SY0;
+        let ux = AXIS + (sx - AXIS) / self.ac * self.sign;
+        (mark(ux, sy), ux, sy)
+    }
+
+    #[inline]
+    fn cov(&self, d: f32) -> f32 {
+        sat(0.5 - d / self.aa)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn logo_w() -> u32 {
     W as u32
@@ -141,63 +162,66 @@ pub extern "C" fn logo_render(dt: f32, t: f32, energy: f32, hover: f32) -> *cons
     }
     l.clock += dt;
 
-    let (c, sn) = (crate::math::cos(l.theta), crate::math::sin(l.theta));
+    let (c, sn) = (cos(l.theta), sin(l.theta));
     let ac = max(abs(c), 1e-3);
     let face = c >= 0.0;
     // Pixel footprint in source units, widened as the card turns edge-on.
-    let aa = S / sqrt(ac);
+    let v = View { ac, sign: if face { 1.0 } else { -1.0 }, aa: S / sqrt(ac) };
     let spinning = l.theta != 0.0;
 
     // Apex glint: 0.6 s every 4.5 s, quantised to 12.5 fps like a GIF.
     let gclk = floor(l.clock * 12.5) / 12.5;
     let gphase = gclk - floor(gclk / 4.5) * 4.5;
     let glint = if gphase < 0.6 { sat(1.0 - abs(gphase - 0.3) / 0.3) } else { 0.0 };
-    let (gx, gy) = (AXIS / S, TRI[0].1 / S + 1.0);
+    let gx = (AXIS - SX0) / S;
+    let gy = (TRI[0].1 - SY0) / S + 1.5;
 
-    // Specular band position (source units along x+y), only while turning.
     let sweep = if spinning { lerp(-200.0, 1100.0, sat((sn + 1.0) * 0.5)) } else { -1e4 };
     let frame = (t * 30.0) as u32;
+    let (y_top, y_bot) = (TRI[0].1, TRI[1].1);
+    let eps = S * 0.5;
 
-    for y in 0..H {
-        let fy = y as f32 / (H - 1) as f32;
-        for x in 0..W {
-            let fx = x as f32 / (W - 1) as f32;
+    for y in 0..H as i32 {
+        for x in 0..W as i32 {
+            let i4 = (y as usize * W + x as usize) * 4;
+            let th = bayer(x as u32, y as u32);
 
-            // slate (39,66,84) → (70,98,106) → sage, warmer to the right
-            let (mut r, mut g, mut b) = if fy < 0.5 {
-                let k = fy * 2.0;
-                (lerp(0.153, 0.275, k), lerp(0.259, 0.384, k), lerp(0.329, 0.416, k))
-            } else {
-                let k = (fy - 0.5) * 2.0;
-                let br = (lerp(0.514, 0.714, fx), lerp(0.596, 0.725, fx), lerp(0.584, 0.663, fx));
-                (lerp(0.275, br.0, k), lerp(0.384, br.1, k), lerp(0.416, br.2, k))
-            };
+            let (d, ux, sy) = v.sample(x, y);
+            let wm = wordmark(x, y);
+            let mut col: Option<(f32, f32, f32)> = None;
 
-            let sx = (x as f32 + 0.5) * S;
-            let sy = (y as f32 + 0.5) * S;
-            if sy < 300.0 {
-                let ux = AXIS + (sx - AXIS) / ac * if face { 1.0 } else { -1.0 };
-                let d = mark(ux, sy);
-                let glow = exp(-max(d, 0.0) * (1.0 / 13.0)) * 0.55 * ac;
-                let cov = sat(0.5 - d / aa);
-                r += (1.0 - r) * glow;
-                g += (1.0 - g) * glow;
-                b += (1.0 - b) * glow;
-                if cov > 0.0 {
-                    let shade = if face { 0.82 + 0.18 * ac } else { 0.55 + 0.2 * ac };
-                    let spec = sat(1.0 - abs(ux + sy - sweep) / 90.0) * 0.6;
-                    let (mr, mg, mb) = (shade + spec, shade + spec, shade * 0.98 + spec);
-                    r = lerp(r, mr, cov);
-                    g = lerp(g, mg, cov);
-                    b = lerp(b, mb, cov);
+            if v.cov(d) > th {
+                // brand slate, lighter at the apex, deeper at the base
+                let k = sat((sy - y_top) / (y_bot - y_top));
+                let (mut r, mut g, mut b) =
+                    (lerp(0.36, 0.13, k), lerp(0.52, 0.24, k), lerp(0.60, 0.31, k));
+                if !face {
+                    r *= 0.6;
+                    g *= 0.6;
+                    b *= 0.6;
                 }
-            }
-
-            let wm = wordmark(x as i32, y as i32);
-            if wm > 0.0 {
-                r = lerp(r, 1.0, wm);
-                g = lerp(g, 1.0, wm);
-                b = lerp(b, 1.0, wm);
+                // bevel: outward normal from the SDF gradient
+                if d > -BEVEL {
+                    let nx = mark(ux + eps, sy) - mark(ux - eps, sy);
+                    let ny = mark(ux, sy + eps) - mark(ux, sy - eps);
+                    let inv = 1.0 / max(sqrt(nx * nx + ny * ny), 1e-4);
+                    let lit = (nx * v.sign * LIGHT.0 + ny * LIGHT.1) * inv;
+                    let k = (1.0 - (-d) / BEVEL) * lit * 0.5;
+                    r += k;
+                    g += k;
+                    b += k;
+                }
+                let spec = sat(1.0 - abs(ux + sy - sweep) / 90.0) * 0.7;
+                col = Some((r + spec, g + spec, b + spec));
+            } else if wm > th {
+                let k = sat((y - WM_Y) as f32 / WM_H as f32);
+                col = Some((lerp(0.24, 0.12, k), lerp(0.36, 0.22, k), lerp(0.44, 0.29, k)));
+            } else {
+                // drop shadow: same field, sampled up-left
+                let (ds, _, _) = v.sample(x - SHADOW, y - SHADOW);
+                if v.cov(ds) > th || wordmark(x - SHADOW, y - SHADOW) > th {
+                    col = Some((0.42, 0.42, 0.46));
+                }
             }
 
             if glint > 0.0 && !spinning {
@@ -208,25 +232,31 @@ pub extern "C" fn logo_render(dt: f32, t: f32, energy: f32, hover: f32) -> *cons
                 } else if dx < 0.6 && dy < arm {
                     1.0 - dy / arm
                 } else if dx < 1.5 && dy < 1.5 {
-                    0.6
+                    1.0
                 } else {
                     0.0
                 } * glint;
-                r += k;
-                g += k;
-                b += k;
-            }
-
-            if energy > 0.0 {
-                let hz = hash32((y * W + x) as u32 ^ frame.wrapping_mul(0x632b_e5ab));
-                if ((hz & 0xffff) as f32) < energy * 3000.0 {
-                    let v = (hz >> 24) as f32 / 255.0;
-                    r = v;
-                    g = v;
-                    b = v;
+                if k > 0.3 {
+                    let (r, g, b) = col.unwrap_or((1.0, 1.0, 1.0));
+                    col = Some((r + k, g + k, b + k * 0.8));
                 }
             }
-            put(&mut *buf, (y * W + x) * 4, x as u32, y as u32, r, g, b);
+
+            match col {
+                Some((mut r, mut g, mut b)) => {
+                    if energy > 0.0 {
+                        let hz = hash32((y as u32 * W as u32 + x as u32) ^ frame.wrapping_mul(0x632b_e5ab));
+                        if ((hz & 0xffff) as f32) < energy * 3000.0 {
+                            let n = (hz >> 24) as f32 / 255.0;
+                            r = n;
+                            g = n;
+                            b = n;
+                        }
+                    }
+                    put(&mut *buf, i4, x as u32, y as u32, r, g, b);
+                }
+                None => clear(&mut *buf, i4),
+            }
         }
     }
     buf.as_ptr()

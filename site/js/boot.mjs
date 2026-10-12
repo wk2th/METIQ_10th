@@ -1,6 +1,7 @@
 // boot.mjs — entry point. Wires the wasm kernel to the DOM and runs the one
 // requestAnimationFrame loop everything hangs off.
 //
+//   pointer on a glyph ──► field_ripple    (decode wave: 縺→Σ→∑→字)
 //   pointer ──► speed ──► fx_energy ──► E ─┬─► field_step   (glyph springs)
 //                                          ├─► crt_render   (noise overlay)
 //                                          ├─► *_render     (GIF surfaces)
@@ -12,7 +13,6 @@ import { GlyphField } from './glyphs.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
-import { Jukebox } from './jukebox.mjs';
 
 const $ = (s) => document.querySelector(s);
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -62,7 +62,7 @@ async function main() {
 
   const glitched = [];
   let energy = 0;
-  const ptr = { x: -1e4, y: -1e4, cx: 0, cy: 0, t: 0, speed: 0, kick: 0, hot: -1, drag: false };
+  const ptr = { cx: 0, cy: 0, t: 0, speed: 0, kick: 0, drag: false };
 
   const calm = () => {
     x.fx_calm(2.5);
@@ -86,9 +86,7 @@ async function main() {
       ptr.t = now;
       ptr.cx = e.clientX;
       ptr.cy = e.clientY;
-      ptr.x = e.pageX;
-      ptr.y = e.pageY;
-      ptr.hot = field.hotGroup(e.target);
+      if (!reduced.matches && e.target.classList?.contains('g') && field.touch(e.target)) ptr.kick += 0.05;
       if (energy > 0.15) x.spark_emit(e.clientX, e.clientY, vx, vy, energy > 0.5 ? 2 : 1);
       if (ptr.drag && e.target.dataset?.surface === 'globe') x.globe_push(e.movementX * 0.08);
     },
@@ -146,23 +144,13 @@ async function main() {
     }
     wasGlitch = glitch;
 
-    field.step(dt, t, energy, ptr.x, ptr.y, ptr.hot);
+    field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);
 
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-
-  const jb = $('#jukebox');
-  if (jb) {
-    new Jukebox(k.bytes, {
-      play: jb.querySelector('[data-act=play]'),
-      stop: jb.querySelector('[data-act=stop]'),
-      time: jb.querySelector('[data-time]'),
-      state: jb.querySelector('[data-state]'),
-    });
-  }
 
   const lm = $('#lastmod');
   if (lm) lm.textContent = new Date(document.lastModified).toLocaleDateString('ja-JP');

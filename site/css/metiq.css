@@ -44,3 +44,6 @@ canvas[data-surface="globe"]:active { cursor: grabbing; }
   blink { animation: none; }
   marquee { display: block; }
 }
+
+/* a glyph mid-decode: pinned to its own box, substitute centred inside it */
+.g.z { text-align: center; white-space: nowrap; }
