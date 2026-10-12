@@ -51,6 +51,13 @@ mod hw {
 
 pub use hw::{floor, floor64, sqrt};
 
+/// Smallest whole number of `step`s that is ≥ x (for x ≥ 0).
+#[inline(always)]
+pub fn ceil_div(x: f32, step: f32) -> f32 {
+    let q = floor(x / step);
+    if q * step < x { q + 1.0 } else { q }
+}
+
 #[inline(always)]
 pub fn fract(x: f32) -> f32 {
     x - floor(x)

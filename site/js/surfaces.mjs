@@ -6,6 +6,7 @@
 // is low-passed here so the shaders receive a continuous 0..1 signal.
 
 const SPECS = {
+  logo:    (x) => ({ w: x.logo_w(),      h: x.logo_h(),     render: x.logo_render }),
   globe:   (x) => ({ w: x.globe_size(),  h: x.globe_size(), render: x.globe_render }),
   counter: (x) => ({ w: x.odo_w(),       h: x.odo_h(),      render: x.odo_render }),
   sign:    (x) => ({ w: x.sign_w(),      h: x.sign_h(),     render: x.sign_render, scale: 2 }),
@@ -45,6 +46,15 @@ export function mountSurfaces(k) {
   const list = [];
   const byName = {};
   const io = new IntersectionObserver((es) => es.forEach((e) => (e.target.__surface.visible = e.isIntersecting)));
+  // <IMG DATA-SURFACE> is the no-JS fallback (a real dithered GIF); swap it
+  // for a live canvas of the same size and name.
+  for (const img of document.querySelectorAll('img[data-surface]')) {
+    const c = document.createElement('canvas');
+    c.dataset.surface = img.dataset.surface;
+    c.title = img.alt;
+    c.setAttribute('aria-label', img.alt);
+    img.replaceWith(c);
+  }
   for (const canvas of document.querySelectorAll('canvas[data-surface]')) {
     const name = canvas.dataset.surface;
     const s = new Surface(k, canvas, SPECS[name](k.x));

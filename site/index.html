@@ -11,13 +11,16 @@
    With JavaScript on, nothing you see moving is CSS or a GIF:
 
    +------------------------------------------------------------------------+
-   |  metiq_core.wasm   47 KB · Rust #![no_std] · no allocator · no bindgen  |
+   |  metiq_core.wasm   54 KB · Rust #![no_std] · no allocator · no bindgen  |
    |                    all state in .bss, memory never grows, so JS holds   |
    |                    ImageData that aliases linear memory (zero copy)     |
    |                                                                         |
    |  field     ~1-4k damped springs, one per grapheme (Intl.Segmenter)      |
    |            target = noise tremble + (1-d/R)^2 repel + hover wave        |
    |            emits only dirty indices; idle glyphs carry no transform     |
+   |  logo      the mark is not an image: two traced polygons evaluated as   |
+   |            an exact signed distance field per pixel -> AA, halo and    |
+   |            a 3-D turn about the apex axis all fall out of one d(p)     |
    |  crt       noise via 4-lane xorshift32 in a v128 (simd128), scanlines,  |
    |            VHS hum bar, tear bands                                      |
    |  odometer  carry-propagating drum: w_i(c)=floor(c/10^i)%10              |
@@ -59,7 +62,7 @@
 
 <TABLE WIDTH="640" BORDER="0" CELLPADDING="2" CELLSPACING="0" BGCOLOR="#000080">
 <TR><TD>
-<MARQUEE SCROLLAMOUNT="4" SCROLLDELAY="60"><FONT COLOR="#FFFF00"><B>★☆★ ようこそ！ 高IQ団体 METIQ 公式ホームページへ ★☆★ 当ページはリンクフリーです ★☆★ キリ番を踏んだ方はゲストブックに書き込んでね！ ★☆★</B></FONT></MARQUEE>
+<MARQUEE SCROLLAMOUNT="4" SCROLLDELAY="60"><FONT COLOR="#FFFF00"><B>★☆★ ようこそ！ 高IQ団体 METIQ 公式ホームページへ ★☆★ 全人類の上位0.01%に入るIQを持つ方であれば誰でも入会できます ★☆★ 当ページはリンクフリーです ★☆★ キリ番を踏んだ方はゲストブックに書き込んでね！ ★☆★</B></FONT></MARQUEE>
 </TD></TR>
 </TABLE>
 
@@ -68,9 +71,9 @@
 <TABLE WIDTH="640" BORDER="0" CELLPADDING="0" CELLSPACING="0">
 <TR>
 <TD WIDTH="100" ALIGN="CENTER" VALIGN="MIDDLE"><CANVAS DATA-SURFACE="globe" TITLE="ドラッグで回るよ"></CANVAS></TD>
-<TD ALIGN="CENTER" VALIGN="MIDDLE" DATA-FX="title">
-<FONT SIZE="7" FACE="Times New Roman,Times,serif"><B><I><FONT COLOR="#FF0000">M</FONT><FONT COLOR="#FF8C00">E</FONT><FONT COLOR="#DAA520">T</FONT><FONT COLOR="#008000">I</FONT><FONT COLOR="#0000FF">Q</FONT></I></B></FONT><BR>
-<FONT SIZE="3" COLOR="#000080"><B>～ 高IQ団体 OFFICIAL HOME PAGE ～</B></FONT>
+<TD ALIGN="CENTER" VALIGN="MIDDLE">
+<IMG SRC="img/metiq_logo.gif" WIDTH="240" HEIGHT="124" ALT="METIQ" DATA-SURFACE="logo"><BR>
+<FONT SIZE="3" COLOR="#000080" DATA-FX="title"><B>～ 高IQ団体 OFFICIAL HOME PAGE ～</B></FONT>
 </TD>
 <TD WIDTH="100" ALIGN="CENTER" VALIGN="MIDDLE"><FONT SIZE="2" COLOR="#808080">Since<BR>2026.10.12</FONT></TD>
 </TR>
@@ -115,7 +118,7 @@
 <A NAME="news"></A>
 <FONT COLOR="#800000" SIZE="4"><B>■ 新着情報 ■</B></FONT>
 <TABLE WIDTH="100%" BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#FFFFFF">
-<TR><TD WIDTH="110" NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">「METIQ 公式ホームページ」を開設しました！ <FONT COLOR="#FF0000"><B><BLINK>NEW!</BLINK></B></FONT></FONT></TD></TR>
+<TR><TD WIDTH="110" NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">公式ホームページをリニューアルしました！ <FONT COLOR="#FF0000"><B><BLINK>NEW!</BLINK></B></FONT></FONT></TD></TR>
 <TR><TD NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">アクセスカウンターを設置しました。</FONT></TD></TR>
 <TR><TD NOWRAP><FONT SIZE="2">2026.10.12</FONT></TD><TD><FONT SIZE="2">ゲストブックを設置しました。お気軽に書き込んでください。</FONT></TD></TR>
 </TABLE>
@@ -129,15 +132,33 @@
 <A NAME="about"></A>
 <FONT COLOR="#800000" SIZE="4"><B>■ METIQとは ■</B></FONT>
 <BLOCKQUOTE>
-<FONT SIZE="3"><B>METIQ</B> は高IQ団体です。</FONT><BR>
-<FONT SIZE="2">くわしいご紹介は準備中です。もうしばらくお待ちください。</FONT>
+<FONT SIZE="3">
+2016年現在、他の先進諸国に比べ、高IQ団体が極端に少ない日本。<BR>
+高いIQを持つ方々の交流の場は非常に限られています。海外の高IQ団体に所属しても、言語や文化背景の差から有意義な活動ができないという話をよく耳にします。<BR>
+上記課題を解決するために「<B>METIQ</B>」を発足いたしました。複数の高IQ団体がそれぞれの特色を発揮することで、選択の幅が広がるようになると思います。
+</FONT>
+<P>
+<FONT SIZE="3">
+「<B>METIQ</B>」は<FONT COLOR="#FF0000"><B>全人類の上位0.01%</B></FONT>に入るIQを持つ方であれば誰でも入会することができます。政治的、宗教的、その他個人の活動に対し完全に中立（関与しない立場）な団体です。
+</FONT>
+<P>
+<FONT SIZE="3">下記のIQ以上のスコアを達成された方をお待ちしております。<BR>
+詳しくは <A HREF="#join">入会案内</A> から。</FONT>
+<P>
+<TABLE BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#FFFFFF">
+<TR BGCOLOR="#000080"><TH><FONT COLOR="#FFFFFF" SIZE="2">IQ</FONT></TH><TH><FONT COLOR="#FFFFFF" SIZE="2">標準偏差</FONT></TH><TH><FONT COLOR="#FFFFFF" SIZE="2">尺度</FONT></TH></TR>
+<TR><TD ALIGN="CENTER"><B>156</B></TD><TD ALIGN="CENTER">SD 15</TD><TD>Wechsler scale</TD></TR>
+<TR><TD ALIGN="CENTER"><B>160</B></TD><TD ALIGN="CENTER">SD 16</TD><TD>Stanford-Binet scale</TD></TR>
+<TR><TD ALIGN="CENTER"><B>190</B></TD><TD ALIGN="CENTER">SD 24</TD><TD ALIGN="CENTER">-</TD></TR>
+</TABLE>
 </BLOCKQUOTE>
 </TD></TR>
 <TR><TD>
 <A NAME="join"></A>
 <FONT COLOR="#800000" SIZE="4"><B>■ 入会案内 ■</B></FONT>
 <BLOCKQUOTE>
-<FONT SIZE="3">ただいま準備中です。もうしばらくお待ちください。</FONT>
+<FONT SIZE="3">入会条件・お申し込み方法は下記ページをご覧ください。</FONT><BR><BR>
+<FONT SIZE="3">→ <A HREF="https://kanji-love.wixsite.com/metiq/how-to-join"><B>HOW TO JOIN</B></A>（入会条件）</FONT>
 </BLOCKQUOTE>
 </TD></TR>
 </TABLE>

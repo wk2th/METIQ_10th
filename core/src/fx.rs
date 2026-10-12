@@ -69,5 +69,6 @@ pub extern "C" fn fx_calm(hold: f32) {
     crate::field::field_reset();
     crate::odometer::settle();
     crate::globe::settle();
+    crate::logo::settle();
     crate::spark::clear();
 }

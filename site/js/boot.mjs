@@ -101,6 +101,7 @@ async function main() {
     ptr.kick += 0.3;
     ptr.drag = true;
     if (e.target.dataset?.surface === 'counter') x.odo_kick(30);
+    if (e.target.dataset?.surface === 'logo') x.logo_kick(9);
   });
   addEventListener('pointerup', () => (ptr.drag = false));
   addEventListener('scroll', () => (ptr.speed = Math.max(ptr.speed, 600)), { passive: true });
