@@ -1,10 +1,13 @@
 // destroy.mjs — every ~10 s one table or picture on screen is destroyed and
 // re-formed. Five ways, picked at random (never the same twice running):
 //
-//   electric   blue-white arcs crawl the cracks, then it bursts like glass
+//   electric   blue-white arcs crawl the cracks, it chars black, bursts
 //   rust       rust blooms and spreads, the text rots, it crumbles away
-//   lightning  a bolt comes down from the top of the screen and blows it apart
-//   meteor     a fireball streaks in, shockwave, screen shake, explosion
+//   lightning  a bolt comes down from the top of the screen, it chars, blows apart
+//   meteor     a fireball streaks in, shockwave, shake, it burns, explodes
+//
+// Pieces never fade: they keep charring / rusting on the way down and are
+// removed only once they have left the viewport.
 //   hack       green scanlines, text → hex, a terminal deletes it strip by strip
 //
 // All geometry, motion and skins come from core/src/destroy.rs. Here we pick
@@ -15,7 +18,7 @@
 
 const TARGETS = 'table[border]:not([border="0"]), canvas[data-surface]';
 const MODES = ['electric', 'rust', 'lightning', 'meteor', 'hack'];
-const MAXP = 96;
+const MAXP = 160;
 const POLY = 34;
 const OUT = 7;
 const LINE = 69;
@@ -74,7 +77,7 @@ export class Destroyer {
     const box = { x: (r.left + scrollX) / z, y: (r.top + scrollY) / z, w: r.width / z, h: r.height / z };
     const ix = box.w * (0.2 + 0.6 * Math.random());
     const iy = box.h * (0.2 + 0.6 * Math.random());
-    this.n = this.k.x.destroy_plan(mode, box.w, box.h, ix, iy, r.top / z, r.left + scrollX, r.top + scrollY, (Math.random() * 2 ** 32) >>> 0, g0, g1, t, z);
+    this.n = this.k.x.destroy_plan(mode, box.w, box.h, ix, iy, r.top / z, r.left + scrollX, r.top + scrollY, (Math.random() * 2 ** 32) >>> 0, g0, g1, t, z, innerHeight / z);
     this.el = this.lastEl = el;
     this.box = box;
     this.impact = { x: ix, y: iy };
@@ -96,7 +99,7 @@ export class Destroyer {
     this.host = host;
     this.scale = Math.max(2, Math.ceil(Math.max(box.w / 400, box.h / 240)));
     this.skin = null;
-    if (MODES[mode] !== 'electric') {
+    {
       const sk = document.createElement('canvas');
       sk.width = this.k.x.destroy_skin_w(this.scale);
       sk.height = this.k.x.destroy_skin_h(this.scale);
@@ -325,17 +328,31 @@ export class Destroyer {
     const o = this.out;
     const pl = this.polys;
     const hack = this.mode === 4;
+    const rust = this.mode === 1;
     this.pieces.forEach((wrap, i) => {
+      if (!wrap) return;
       const b = i * OUT;
       const pb = i * POLY;
+      if (o[b + 6] === 2) {
+        // fell (or slid) out of view: drop it, no fading
+        wrap.remove();
+        this.pieces[i] = null;
+        return;
+      }
       const s = wrap.style;
       if (hack) {
         s.transform = `translate(${o[b].toFixed(1)}px, ${o[b + 1].toFixed(1)}px)`;
       } else {
         s.transform = `translate3d(${o[b].toFixed(1)}px, ${o[b + 1].toFixed(1)}px, ${o[b + 2].toFixed(1)}px) rotate3d(${pl[pb + 3].toFixed(3)}, ${pl[pb + 4].toFixed(3)}, ${pl[pb + 5].toFixed(3)}, ${o[b + 3].toFixed(1)}deg)`;
       }
-      s.opacity = o[b + 4].toFixed(3);
-      s.filter = hack ? 'drop-shadow(0 0 2px #00ff66) brightness(1.2)' : `brightness(${o[b + 5].toFixed(2)})`;
+      // pieces keep rotting / charring as they fall
+      const d = o[b + 4];
+      const br = o[b + 5];
+      s.filter = hack
+        ? 'drop-shadow(0 0 2px #00ff66) brightness(1.2)'
+        : rust
+          ? `sepia(${(0.75 * d).toFixed(2)}) saturate(${(1 + 0.9 * d).toFixed(2)}) hue-rotate(${(-14 * d).toFixed(1)}deg) brightness(${(br * (1 - 0.4 * d)).toFixed(2)})`
+          : `brightness(${(br * (1 - 0.66 * d)).toFixed(2)}) contrast(${(1 + 0.3 * d).toFixed(2)}) sepia(${(0.4 * d).toFixed(2)})`;
       if (o[b + 6] && !this.released[i]) {
         this.released[i] = 1;
         const cx = this.vx(pl[pb + 1]);
@@ -345,7 +362,9 @@ export class Destroyer {
       }
     });
 
-    if (stage === 3) {
+    if (stage === 4) {
+      st.visibility = st.opacity = st.scale = st.filter = '';
+    } else if (stage === 3) {
       st.visibility = '';
       st.opacity = Math.min(1, fx[2] * 1.6).toFixed(3);
       st.scale = (0.92 + 0.08 * fx[2]).toFixed(4);

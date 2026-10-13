@@ -36,14 +36,14 @@ use crate::palette::{bayer, clear, put};
 use crate::rng::{h01, hash32, hsym, Pcg};
 use crate::Slot;
 
-pub const MAXP: usize = 96;
+pub const MAXP: usize = 160;
 const MAXV: usize = 14;
 const POLY: usize = 6 + MAXV * 2; // nv, cx, cy, ax, ay, az, then xy pairs
-const OUT: usize = 7; // dx, dy, dz, angle°, alpha, brightness, released
+const OUT: usize = 7; // dx, dy, dz, angle°, decay 0..1, brightness, 0 attached / 1 falling / 2 gone
 const MAXL: usize = 160;
 const LPTS: usize = 33;
 const LINE: usize = 3 + LPTS * 2; // style, alpha, n, then xy pairs
-const MAXE: usize = 150;
+const MAXE: usize = 260;
 const SKW: usize = 400;
 const SKH: usize = 240;
 const FXN: usize = 16;
@@ -56,8 +56,11 @@ const METEOR: u32 = 3;
 const HACK: u32 = 4;
 
 /// (pre-phase, time from break until re-form starts) per mode
-const TIMING: [(f32, f32); 5] = [(0.5, 1.25), (2.4, 1.9), (0.5, 1.3), (0.9, 1.5), (1.8, 1.1)];
+const TIMING: [(f32, f32); 5] = [(1.0, 1.4), (2.4, 1.9), (1.05, 1.4), (1.45, 1.5), (1.8, 1.1)];
 const STRIKE: f32 = 0.3; // lightning hits at this τ
+const METEOR_HIT: f32 = 0.9; // meteor lands at this τ
+/// longest we wait for the last debris to leave the screen after re-forming
+const DEBRIS_GRACE: f32 = 3.0;
 
 type V2 = (f32, f32);
 
@@ -67,6 +70,7 @@ struct Plan {
     h: f32,
     impact: V2,
     sky: f32,
+    vh: f32,
     origin: V2,
     zoom: f32,
     seed: u32,
@@ -88,6 +92,7 @@ static PL: Slot<Plan> = Slot::new(Plan {
     h: 0.0,
     impact: (0.0, 0.0),
     sky: 0.0,
+    vh: 800.0,
     origin: (0.0, 0.0),
     zoom: 1.0,
     seed: 0,
@@ -330,6 +335,7 @@ pub extern "C" fn destroy_plan(
     g1: u32,
     t: f32,
     zoom: f32,
+    vh: f32,
 ) -> u32 {
     destroy_cancel();
     let p = PL.get();
@@ -342,12 +348,13 @@ pub extern "C" fn destroy_plan(
     p.sky = sky;
     p.origin = (ox, oy);
     p.zoom = max(zoom, 0.05);
+    p.vh = vh;
     p.seed = seed;
     p.t0 = t;
     p.tau = 0.0;
     p.g = (g0 as usize, min(g1 as f32, field::CAP as f32) as usize);
 
-    let target = min(max(w * h / 520.0, 28.0), MAXP as f32) as usize;
+    let target = min(max(w * h / 240.0, 48.0), MAXP as f32) as usize;
     let mut seeds = [(0.0f32, 0.0f32); MAXP];
     match p.mode {
         HACK => strips(p, rng),
@@ -403,17 +410,25 @@ fn rust_at(p: &Plan, x: f32, y: f32, pr: f32) -> f32 {
     sat((v - (1.0 - pr * 1.15)) * 5.0)
 }
 
-/// Normalised scorch distance from the impact (≤ 1 is burnt), noise-warped.
-fn burn_at(p: &Plan, x: f32, y: f32) -> f32 {
-    let rb = if p.mode == METEOR { 40.0 + 0.22 * min(p.w, p.h) } else { 22.0 + 0.12 * min(p.w, p.h) };
+/// Normalised char distance from the impact at time τ (≤ 1 is burnt).
+/// The burn starts as a scorch round the impact and spreads, noise-warped,
+/// until the whole object is blackened just before it breaks.
+fn char_at(p: &Plan, x: f32, y: f32, tau: f32) -> f32 {
+    let (pre, _) = TIMING[p.mode as usize];
+    let start = impact_time(p);
+    let cp = sat((tau - start) / max(pre - start, 0.05));
+    let diag = sqrt(p.w * p.w + p.h * p.h);
+    let rb = if p.mode == METEOR { 40.0 + 0.22 * min(p.w, p.h) } else { 18.0 + 0.1 * min(p.w, p.h) };
+    let r = lerp(rb, diag * 1.15, cp * sqrt(cp));
     let (dx, dy) = (x - p.impact.0, y - p.impact.1);
-    sqrt(dx * dx + dy * dy) / rb + 0.35 * fbm3(x / 12.0, y / 12.0, 7.1, 3, p.seed ^ 0xB0)
+    sqrt(dx * dx + dy * dy) / r + 0.3 * fbm3(x / 12.0, y / 12.0, 7.1, 3, p.seed ^ 0xB0)
 }
 
 fn impact_time(p: &Plan) -> f32 {
     match p.mode {
+        ELECTRIC => 0.15,
         LIGHTNING => STRIKE,
-        METEOR => TIMING[METEOR as usize].0,
+        METEOR => METEOR_HIT,
         _ => 0.0,
     }
 }
@@ -462,7 +477,8 @@ fn jagged(a: V2, b: V2, levels: u32, rough: f32, salt: u32, out: &mut [V2; LPTS]
 
 // ───────────────────────────────── step ─────────────────────────────────────
 
-/// Advance. Returns 0 done, 1 pre-phase, 2 broken, 3 re-forming.
+/// Advance. Returns 0 done, 1 pre-phase, 2 broken, 3 re-forming,
+/// 4 re-formed but debris still on screen.
 #[no_mangle]
 pub extern "C" fn destroy_step(t: f32) -> u32 {
     let p = PL.get();
@@ -542,8 +558,8 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
             }
         }
         METEOR => {
-            if tau < pre {
-                let k = tau / pre;
+            if tau < METEOR_HIT {
+                let k = tau / METEOR_HIT;
                 let k = k * sqrt(k); // accelerating in
                 let dir = if hsym(p.seed >> 3) < 0.0 { -1.0 } else { 1.0 };
                 let start = (p.impact.0 + dir * 650.0, -p.sky - 220.0);
@@ -551,7 +567,7 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
                 fx[9] = lerp(start.1, p.impact.1, k);
                 fx[10] = 7.0 + 5.0 * k;
             } else {
-                let s = tau - pre;
+                let s = tau - METEOR_HIT;
                 if s < 0.15 {
                     fx[4] = 1.0 - s / 0.15;
                 }
@@ -572,17 +588,17 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
     }
     fx[7] = match p.mode {
         RUST | HACK => 1.0,
-        LIGHTNING | METEOR => {
+        _ => {
             if tau > hit {
                 1.0
             } else {
                 0.0
             }
         }
-        _ => 0.0,
     };
 
     // ── pieces ──
+    let mut all_gone = true;
     let pb = POLYS.get();
     let ob = OUTB.get();
     for i in 0..p.n {
@@ -597,40 +613,41 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
         let o = i * OUT;
 
         let delay = match p.mode {
-            RUST => (1.0 - rust_at(p, cx, cy, 0.75)) * 1.3 + 0.25 * u1,
+            RUST => (1.0 - rust_at(p, cx, cy, 0.75)) * 1.3 + 0.35 * u1,
             HACK => pb[b + 5] / max(p.rows as f32, 1.0) * 0.55 + 0.12 * u1,
             _ => {
-                let hang = if d / diag > 0.35 && u4 < 0.3 { 0.15 + 0.5 * u3 } else { 0.0 };
-                d / diag * 0.18 + hang
+                let hang = if d / diag > 0.3 && u4 < 0.35 { 0.15 + 0.6 * u3 } else { 0.0 };
+                d / diag * 0.2 + 0.12 * u1 + hang
             }
         };
         let f = tau - pre - delay;
 
-        let (mut ddx, mut ddy, mut dz, mut ang, mut br) = (0.0, 0.0, 0.0, 0.0, 1.0);
-        let al: f32;
+        let (mut ddx, mut dz, mut ang, mut br) = (0.0, 0.0, 0.0, 1.0);
+        let ddy: f32;
+        let decay: f32;
         if f <= 0.0 {
-            if p.mode == RUST && f > -0.3 && tau > pre {
-                ddx = sin(tau * 70.0 + i as f32) * 0.8;
+            // still attached: shiver just before letting go
+            if f > -0.3 && tau > pre {
+                ddx = sin(tau * 70.0 + i as f32) * 0.9;
             }
-            if (p.mode == LIGHTNING || p.mode == METEOR) && tau > hit && d < 30.0 {
-                br = 0.55;
-            }
-            ob[o..o + OUT].copy_from_slice(&[ddx, 0.0, 0.0, 0.0, 1.0, br, 0.0]);
+            ob[o..o + OUT].copy_from_slice(&[ddx, 0.0, 0.0, 0.0, 0.0, br, 0.0]);
             continue;
         }
         match p.mode {
             RUST => {
                 ddx = hsym(hsh) * 14.0 * f;
                 ddy = 0.5 * 900.0 * f * f;
-                ang = (40.0 + 90.0 * u2) * f * if u3 < 0.5 { -1.0 } else { 1.0 };
-                al = 1.0 - sat((f - 0.55) / 0.6);
-                br = 0.8;
+                ang = (40.0 + 140.0 * u2) * f * if u3 < 0.5 { -1.0 } else { 1.0 };
+                dz = hsym(hsh >> 9) * 80.0 * f;
+                decay = sat(f / 1.0);
+                br = 0.85;
             }
             HACK => {
                 let fq = floor(f * 15.0) / 15.0; // digital: 15 fps steps
                 let dir = if u2 < 0.5 { -1.0 } else { 1.0 };
                 ddx = dir * (60.0 * fq + 1100.0 * fq * fq) * (0.6 + 0.8 * u3);
-                al = 1.0 - floor(sat(fq / 0.55) * 4.0) / 4.0;
+                ddy = 0.5 * 600.0 * fq * fq * u4;
+                decay = 0.0;
                 br = 1.3;
             }
             _ => {
@@ -639,20 +656,21 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
                     LIGHTNING => (90.0 + 420.0 * near * near, 90.0 + 160.0 * near, 300.0 + 500.0 * u2, 1350.0, 260.0),
                     _ => (60.0 + 280.0 * near * near, 60.0 + 110.0 * near, 250.0 + 450.0 * u2, 1300.0, 220.0),
                 };
-                let v = vr * (0.6 + 0.8 * u1);
-                ddx = ux * v * f + hsym(hsh >> 3) * 25.0 * f;
-                ddy = uy * v * 0.6 * f - up * (0.5 + u3) * f + 0.5 * g * f * f;
+                let v = vr * (0.5 + 1.0 * u1);
+                ddx = ux * v * f + hsym(hsh >> 3) * 70.0 * f;
+                ddy = uy * v * 0.6 * f - up * (0.4 + 0.9 * u3) * f + 0.5 * g * f * f;
                 dz = hsym(hsh >> 9) * kz * f;
                 ang = spin * f * if u4 < 0.5 { -1.0 } else { 1.0 };
-                let k = sat(f / 1.25);
-                al = 1.0 - k * k;
-                br = 1.0 + 0.45 * sin(ang * (PI / 90.0)); // glint as it tumbles
-                if (p.mode == LIGHTNING || p.mode == METEOR) && d < 40.0 {
-                    br *= 0.6;
-                }
+                decay = sat(f / 0.9); // keeps charring on the way down
+                br = 1.0 + 0.35 * sin(ang * (PI / 90.0)); // glint as it tumbles
             }
         }
-        ob[o..o + OUT].copy_from_slice(&[ddx, ddy, dz, ang, al, br, 1.0]);
+        // gone once it has dropped (or slid) clean out of the viewport
+        let gone = if p.mode == HACK { abs(ddx) > p.w + 300.0 } else { ddy > p.vh + p.h + 120.0 };
+        if !gone {
+            all_gone = false;
+        }
+        ob[o..o + OUT].copy_from_slice(&[ddx, ddy, dz, ang, decay, br, if gone { 2.0 } else { 1.0 }]);
     }
 
     // ── re-form ──
@@ -666,6 +684,8 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
         fx[2] = k;
         fx[3] = 6.0 * (1.0 - k) * (1.0 - k);
         3
+    } else if !all_gone && tau < reform + SEEP + DEBRIS_GRACE {
+        4 // re-formed; the last debris is still falling
     } else {
         0
     };
@@ -676,7 +696,7 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
         let (gx, gy) = field::pos(i);
         let (lx, ly) = ((gx - p.origin.0) / p.zoom, (gy - p.origin.1) / p.zoom);
         let v = match stage {
-            0 => 0.0,
+            0 | 4 => 0.0,
             3 => {
                 let ph = 0.38 + 0.62 * fx[2];
                 if p.mode == HACK { 10.0 + ph } else { 1.0 + ph }
@@ -685,15 +705,11 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
                 if p.mode == HACK { 10.1 } else { 1.1 }
             }
             _ => match p.mode {
-                ELECTRIC => {
-                    let (dx, dy) = (lx - p.impact.0, ly - p.impact.1);
-                    if sqrt(dx * dx + dy * dy) < tau / pre * diag { 1.1 } else { 0.0 }
-                }
                 RUST => {
                     if rust_at(p, lx, ly, sat(tau / pre)) > 0.45 { 1.1 } else { 0.0 }
                 }
-                LIGHTNING | METEOR => {
-                    if tau > hit && burn_at(p, lx, ly) < 2.2 { 1.1 } else { 0.0 }
+                ELECTRIC | LIGHTNING | METEOR => {
+                    if tau > hit && char_at(p, lx, ly, tau) < 1.3 { 1.1 } else { 0.0 }
                 }
                 _ => {
                     if ly < sat(tau / (pre * 0.6)) * p.h { 10.1 } else { 0.0 }
@@ -716,7 +732,7 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
 #[no_mangle]
 pub extern "C" fn destroy_skin(scale: f32) -> *const u8 {
     let p = PL.get();
-    if !p.active || p.mode == ELECTRIC {
+    if !p.active {
         return core::ptr::null();
     }
     let buf = SKIN.get();
@@ -751,10 +767,9 @@ pub extern "C" fn destroy_skin(scale: f32) -> *const u8 {
                         col = Some((r, g, b));
                     }
                 }
-                LIGHTNING | METEOR => {
+                ELECTRIC | LIGHTNING | METEOR => {
                     if tau > hit {
-                        let ps = sat((tau - hit) / 0.2);
-                        let d = burn_at(p, lx, ly) / max(ps, 1e-3);
+                        let d = char_at(p, lx, ly, min(tau, pre));
                         let alpha = if d < 0.6 { 1.0 } else { sat((1.0 - d) / 0.4) };
                         if alpha > th {
                             let k = sat(d);
