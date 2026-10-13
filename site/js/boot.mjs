@@ -6,12 +6,12 @@
 //                                          ├─► crt_render   (noise overlay)
 //                                          ├─► *_render     (GIF surfaces)
 //                                          └─► fx_glitch    (tear events)
-//   ~10 s ──► shatter_*       (lightning, Voronoi shards, glowing re-form)
+//   ~10 s ──► destroy_*       (electric / rust / lightning / meteor / hack, re-form)
 //   capture precursor ──► fx_calm + DOM reset, synchronously
 
 import { boot } from './kernel.mjs';
 import { GlyphField } from './glyphs.mjs';
-import { Shatter } from './shatter.mjs';
+import { Destroyer } from './destroy.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
@@ -52,7 +52,7 @@ async function main() {
 
   installBackground(k);
   const field = new GlyphField(k, document.body);
-  const shatter = new Shatter(k, field);
+  const destroyer = new Destroyer(k, field);
   const { list: surfaces, byName } = mountSurfaces(k);
   const overlay = new Overlay(k);
 
@@ -69,7 +69,7 @@ async function main() {
 
   const calm = () => {
     x.fx_calm(2.5);
-    shatter.restore();
+    destroyer.restore();
     field.calm();
     overlay.calm();
     document.body.classList.remove('glitch');
@@ -148,7 +148,7 @@ async function main() {
     }
     wasGlitch = glitch;
 
-    if (!reduced.matches) shatter.step(t);
+    if (!reduced.matches) destroyer.step(t);
     field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);

@@ -56,3 +56,13 @@ canvas[data-surface="globe"]:active { cursor: grabbing; }
 }
 #arc[hidden] { display: none; }
 @media print { #arc { display: none !important; } }
+
+#flash {
+  position: fixed;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+  z-index: 2147483645;
+}
+#flash[hidden] { display: none; }
+@media print { #flash { display: none !important; } }

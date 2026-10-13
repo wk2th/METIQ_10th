@@ -3,7 +3,8 @@
 //   #sparks  cursor-trail stars from the wasm particle system
 // Both are display:none whenever energy is zero.
 
-const STAR = ['#FFFF00', '#FF00FF', '#00FFFF', '#FFFFFF', '#FF9900', '#CCF2FF', '#99CCFF'];
+// 0-4 cursor trail · 5-6 electric · 7-8 fire · 9 rust dust · 10 smoke · 11 hack green
+const STAR = ['#FFFF00', '#FF00FF', '#00FFFF', '#FFFFFF', '#FF9900', '#CCF2FF', '#99CCFF', '#FF6600', '#FFCC00', '#996633', '#999999', '#00FF66'];
 
 export class Overlay {
   constructor(k) {

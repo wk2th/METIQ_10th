@@ -69,6 +69,12 @@ const MATHS: [char; 32] = [
     '∪', '∫', '∮', '∴', '≅', '≈', '≠', '≡', '≤', '≥', '⊂', '⊃', '⊕', '⊗', '⊥', 'ℵ',
 ];
 
+/// What a hacked glyph shows while its data is being "rewritten".
+#[rustfmt::skip]
+const HEX: [char; 18] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', '0', '1',
+];
+
 struct Field {
     inp: [f32; CAP * IN],
     out: [f32; CAP * OUT],
@@ -85,12 +91,19 @@ struct Field {
 
 // Kept apart from `Field` so its non-zero initialiser doesn't drag ~250 KB of
 // zeroed glyph state from .bss into the binary's data segment.
-/// Externally imposed decode phase per glyph, +1 (0 = none). Written by the
-/// table-collapse system; read here so both effects share one code path.
+/// Externally imposed decode phase per glyph, written by the destruction
+/// director so its effects share this module's decode path:
+/// 0 = none, 1..10 = phase + 1, ≥ 10 = phase + 10 with hex/binary corruption.
 static EXT: Slot<[f32; CAP]> = Slot::new([0.0; CAP]);
 
 pub fn ext() -> &'static mut [f32; CAP] {
     EXT.get()
+}
+
+/// Rest position (document px) of glyph `i`.
+pub fn pos(i: usize) -> (f32, f32) {
+    let f = F.get();
+    (f.inp[i * IN], f.inp[i * IN + 1])
 }
 
 static F: Slot<Field> = Slot::new(Field {
@@ -194,13 +207,17 @@ pub extern "C" fn field_step(n: u32, dt: f32, t: f32, energy: f32) -> u32 {
         let (mut phase, bob) = if kind != 3 { crate::spread::sample(i, t) } else { (2.0, 0.0) };
         ty -= bob * 3.0;
         let ext = EXT.get()[i];
-        if ext > 0.0 && ext - 1.0 < phase {
-            phase = ext - 1.0;
+        let hacked = ext >= 10.0;
+        let ep = if hacked { ext - 10.0 } else { ext - 1.0 };
+        if ext > 0.0 && ep < phase {
+            phase = ep;
         }
 
         let code = if phase < 0.92 {
             let hr = hash32(seed ^ tick.wrapping_mul(0x2c1b_3c6d) ^ (i as u32 * 7919));
-            if phase < 0.38 {
+            if hacked && phase < 0.66 {
+                pick(&HEX, hr >> 3)
+            } else if phase < 0.38 {
                 pick(if wide { &MOJI_WIDE } else { &MOJI_NARROW }, hr)
             } else if phase < 0.66 {
                 pick(if wide { &GREEK_WIDE } else { &GREEK_NARROW }, hr)
