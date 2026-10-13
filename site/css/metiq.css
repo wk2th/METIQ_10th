@@ -47,3 +47,12 @@ canvas[data-surface="globe"]:active { cursor: grabbing; }
 
 /* a glyph mid-decode: pinned to its own box, substitute centred inside it */
 .g.z { text-align: center; white-space: nowrap; }
+
+#arc {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483646;
+}
+#arc[hidden] { display: none; }
+@media print { #arc { display: none !important; } }

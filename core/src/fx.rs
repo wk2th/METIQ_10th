@@ -66,7 +66,7 @@ pub extern "C" fn fx_calm(hold: f32) {
     fx.energy = 0.0;
     fx.glitch = 0.0;
     fx.hold = hold;
-    crate::collapse::shard_cancel();
+    crate::shatter::shatter_cancel();
     crate::field::field_reset();
     crate::odometer::settle();
     crate::globe::settle();

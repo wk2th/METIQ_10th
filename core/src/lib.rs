@@ -15,7 +15,8 @@
 //! Subsystems
 //! ----------
 //! * [`field`]    – per-glyph springs and the mojibake decode ripples
-//! * [`collapse`] – a table falls apart and seeps back from behind the page
+//! * [`spread`]   – corruption spread as first-passage percolation
+//! * [`shatter`]  – Voronoi fracture, crack lightning, re-forming glow
 //! * [`crt`]      – SIMD signal noise, scanlines, tear bands
 //! * [`odometer`] – the access counter (true carry-propagating drum)
 //! * [`globe`]    – ray-cast, ordered-dithered spinning globe w/ satellite
@@ -39,7 +40,8 @@ mod font;
 
 mod fx;
 mod field;
-mod collapse;
+mod spread;
+mod shatter;
 mod crt;
 mod odometer;
 mod globe;

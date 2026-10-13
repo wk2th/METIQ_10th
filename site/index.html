@@ -11,17 +11,18 @@
    With JavaScript on, nothing you see moving is CSS or a GIF:
 
    +------------------------------------------------------------------------+
-   |  metiq_core.wasm   74 KB · Rust #![no_std] · no allocator · no bindgen  |
+   |  metiq_core.wasm   78 KB · Rust #![no_std] · no allocator · no bindgen  |
    |                    all state in .bss, memory never grows, so JS holds   |
    |                    ImageData that aliases linear memory (zero copy)     |
    |                                                                         |
    |  field     ~1-4k damped springs, one per grapheme (Intl.Segmenter)      |
-   |            hover = noise-warped spread (per-ripple lobes, page warp,    |
-   |            strays); each glyph hit decodes mojibake -> greek -> maths   |
-   |            -> truth, candidate re-rolled at 24 Hz                       |
-   |  collapse  ~1/min a table cracks from a random cell, falls ballisti-  |
-   |            cally as mojibake, then seeps back from behind the page     |
    |            emits only dirty indices; idle glyphs carry no transform     |
+   |  spread    hover infects a glyph; corruption percolates to neighbours   |
+   |            along randomly weighted shortest paths (Dijkstra over a      |
+   |            spatial hash); each glyph decodes mojibake -> greek ->       |
+   |            maths -> truth, candidate re-rolled at 24 Hz                 |
+   |  shatter   ~10 s: Voronoi fracture by half-plane clipping, lightning    |
+   |            along the cracks, ballistic shards, glowing re-form          |
    |  logo      the mark is not an image: two traced polygons evaluated as   |
    |            an exact signed distance field per pixel -> AA, halo and    |
    |            a 3-D turn about the apex axis all fall out of one d(p)     |

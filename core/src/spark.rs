@@ -49,7 +49,8 @@ pub extern "C" fn spark_out() -> *const f32 {
 }
 
 #[no_mangle]
-pub extern "C" fn spark_emit(x: f32, y: f32, vx: f32, vy: f32, n: u32) {
+/// `col` < 5 picks a palette entry, ≥ 5 picks electric blue-whites, 255 = random.
+pub extern "C" fn spark_emit(x: f32, y: f32, vx: f32, vy: f32, n: u32, col: u32) {
     let s = SP.get();
     for _ in 0..min(n as f32, 32.0) as u32 {
         let i = s.head;
@@ -60,7 +61,11 @@ pub extern "C" fn spark_emit(x: f32, y: f32, vx: f32, vy: f32, n: u32) {
         s.vy[i] = vy * 0.12 + s.rng.sym() * 70.0 - 50.0;
         s.max[i] = 0.45 + s.rng.f01() * 0.6;
         s.life[i] = s.max[i];
-        s.col[i] = (s.rng.next_u32() % 5) as f32;
+        s.col[i] = match col {
+            255 => (s.rng.next_u32() % 5) as f32,
+            c if c >= 5 => (5 + s.rng.next_u32() % 2) as f32,
+            c => c as f32,
+        };
     }
 }
 

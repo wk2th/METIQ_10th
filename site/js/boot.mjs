@@ -1,17 +1,17 @@
 // boot.mjs — entry point. Wires the wasm kernel to the DOM and runs the one
 // requestAnimationFrame loop everything hangs off.
 //
-//   pointer on a glyph ──► field_ripple    (decode wave: 縺→Σ→∑→字)
+//   pointer on a glyph ──► field_spread    (percolating decode: 縺→Σ→∑→字)
 //   pointer ──► speed ──► fx_energy ──► E ─┬─► field_step   (glyph springs)
 //                                          ├─► crt_render   (noise overlay)
 //                                          ├─► *_render     (GIF surfaces)
 //                                          └─► fx_glitch    (tear events)
-//   ~1/min ──► shard_*        (a table falls apart, seeps back, re-decodes)
+//   ~10 s ──► shatter_*       (lightning, Voronoi shards, glowing re-form)
 //   capture precursor ──► fx_calm + DOM reset, synchronously
 
 import { boot } from './kernel.mjs';
 import { GlyphField } from './glyphs.mjs';
-import { Collapse } from './collapse.mjs';
+import { Shatter } from './shatter.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
@@ -52,7 +52,7 @@ async function main() {
 
   installBackground(k);
   const field = new GlyphField(k, document.body);
-  const collapse = new Collapse(k, field);
+  const shatter = new Shatter(k, field);
   const { list: surfaces, byName } = mountSurfaces(k);
   const overlay = new Overlay(k);
 
@@ -69,7 +69,7 @@ async function main() {
 
   const calm = () => {
     x.fx_calm(2.5);
-    collapse.restore();
+    shatter.restore();
     field.calm();
     overlay.calm();
     document.body.classList.remove('glitch');
@@ -91,7 +91,7 @@ async function main() {
       ptr.cx = e.clientX;
       ptr.cy = e.clientY;
       if (!reduced.matches && e.target.classList?.contains('g') && field.touch(e.target)) ptr.kick += 0.05;
-      if (energy > 0.15) x.spark_emit(e.clientX, e.clientY, vx, vy, energy > 0.5 ? 2 : 1);
+      if (energy > 0.15) x.spark_emit(e.clientX, e.clientY, vx, vy, energy > 0.5 ? 2 : 1, 255);
       if (ptr.drag && e.target.dataset?.surface === 'globe') x.globe_push(e.movementX * 0.08);
     },
     { passive: true },
@@ -148,7 +148,7 @@ async function main() {
     }
     wasGlitch = glitch;
 
-    if (!reduced.matches) collapse.step(t);
+    if (!reduced.matches) shatter.step(t);
     field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);

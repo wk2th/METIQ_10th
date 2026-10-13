@@ -104,12 +104,13 @@ export class GlyphField {
       this.box[i * 2] = r.width;
       this.box[i * 2 + 1] = r.height;
     }
+    this.k.x.field_index(this.n);
   }
 
   /**
-   * Pointer touched a glyph element: start a decode ripple centred on it —
-   * but only once the pointer has travelled a few characters from the last
-   * impact, so reading along a line doesn't keep scrambling it.
+   * Pointer touched a glyph element: infect it, and let the corruption spread
+   * from there — but only once the pointer has moved a couple of characters
+   * from the last infection, so resting on a word doesn't keep re-scrambling.
    */
   touch(el) {
     const i = this.index.get(el);
@@ -117,11 +118,11 @@ export class GlyphField {
     const x = this.inp[i * IN];
     const y = this.inp[i * IN + 1];
     if (this.last) {
-      const reach = Math.max(56, this.box[i * 2] * 3.5);
+      const reach = Math.max(24, this.box[i * 2] * 1.8);
       if (Math.hypot(x - this.last.x, y - this.last.y) < reach) return false;
     }
     this.last = { x, y };
-    this.k.x.field_ripple(x, y, this.t);
+    this.k.x.field_spread(i, this.t);
     return true;
   }
 
