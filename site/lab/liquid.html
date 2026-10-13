@@ -39,6 +39,10 @@ html, body { margin: 0; background: var(--page); color: var(--ink); }
 //             Fresnel to an environment, two-lobe Blinn specular, meniscus line,
 //             cast shadow.
 //
+// Liquid is not poured in: it seeps out of the page's objects a little at a
+// time, and now and then a rain shower falls from above (?rain starts one at
+// once). A fixed particle budget is recycled oldest-first.
+//
 // The page underneath is the real home page (site/lab/page.jpg, written by
 // tools/lab_snapshot.cjs, with page.json giving its tables and pictures as
 // colliders). The simulation lives in page coordinates, so the liquid stays
@@ -447,7 +451,8 @@ function build() {
   const page = drawPage(W, dpr);
   const PH = page.PH;
   $('#scroll').style.height = `${PH}px`;
-  const n = Number(QS.get('n')) || Math.max(3000, Math.min(14000, Math.round((W * Math.min(PH, Hh * 1.4)) / 95)));
+  // a modest budget: the liquid seeps out a little at a time; the oldest is recycled
+  const n = Number(QS.get('n')) || Math.max(1500, Math.min(4000, Math.round((W * Hh) / 260)));
   const gridW = Math.ceil(W / H) + 1;
   const gridH = Math.ceil(PH / H) + 1;
   const cells = gridW * gridH;
@@ -490,35 +495,90 @@ function build() {
   });
 
   S = { W, Hh, PH, dpr, n, gridW, gridH, cells, parts, params, simBG, field, splatBG, splatU, compBG, compU, bgW: page.canvas.width, bgH: page.canvas.height, obs: page.obs.slice(0, MAX_OBS), next: 0 };
-  // start with a heavy blob over the logo, keep the rest for pouring
-  const blob = Math.round(n * 0.55);
-  spawn(W * 0.5, scrollY + 30 + Math.sqrt(blob) * SPACING * 0.5, 0, 120, blob);
+  S.active = 0; // particles that exist yet; the rest of the buffer is unused
+  S.seep = 0;
+  S.rain = { next: QS.has('rain') ? 1 : 6 + Math.random() * 6, until: 0, acc: 0, wind: 0 };
 }
 
-/** Write `count` particles as a dense disc at (x, y) moving with (vx, vy). */
-function spawn(x, y, vx, vy, count) {
+/** Add particles given as [x, y, vx, vy] (page px). Ring buffer: once the
+ *  budget is used up, the oldest liquid is recycled. */
+function emit(list) {
   const { n } = S;
-  count = Math.min(count, n);
+  const count = Math.min(list.length, n);
+  if (!count) return;
   const buf = new Float32Array(count * STRIDE);
   for (let k = 0; k < count; k++) {
-    const r = Math.sqrt(k + 0.5) * SPACING * 0.56;
-    const a = k * 2.399963;
-    const px = Math.min(S.W - 4, Math.max(4, x + Math.cos(a) * r));
-    const py = Math.min(S.PH - 4, Math.max(4, y + Math.sin(a) * r));
+    const [x, y, vx, vy] = list[k];
+    const px = Math.min(S.W - 4, Math.max(4, x));
+    const py = Math.min(S.PH - 4, Math.max(4, y));
     buf.set([px, py, px - vx * DT, py - vy * DT, vx, vy, px, py, 0, 0, 0, 0], k * STRIDE);
   }
-  // ring buffer: the oldest liquid is recycled
   const first = Math.min(count, n - S.next);
   device.queue.writeBuffer(S.parts, S.next * STRIDE * 4, buf, 0, first * STRIDE);
   if (first < count) device.queue.writeBuffer(S.parts, 0, buf, first * STRIDE, (count - first) * STRIDE);
   S.next = (S.next + count) % n;
+  S.active = Math.min(n, S.active + count);
+}
+
+/** A small dense disc at (x, y) – a poured blob. */
+function spawn(x, y, vx, vy, count) {
+  const list = [];
+  for (let k = 0; k < count; k++) {
+    const r = Math.sqrt(k + 0.5) * SPACING * 0.56;
+    const a = k * 2.399963;
+    list.push([x + Math.cos(a) * r, y + Math.sin(a) * r, vx, vy]);
+  }
+  emit(list);
+}
+
+/** Objects on screen ooze: a few particles at a time from their lower edge
+ *  (sometimes a side), so liquid gathers, hangs, drips and pools. */
+function seep(dt) {
+  const top = scrollY;
+  const bottom = scrollY + S.Hh;
+  const seen = S.obs.filter((o) => o[3] > top && o[1] < bottom);
+  if (!seen.length) return;
+  S.seep += dt * 12;
+  const list = [];
+  while (S.seep >= 1) {
+    S.seep -= 1;
+    const [x0, y0, x1, y1] = seen[(Math.random() * seen.length) | 0];
+    const side = Math.random();
+    if (side < 0.75) list.push([x0 + 4 + Math.random() * (x1 - x0 - 8), y1 + 2, 0, 15]);
+    else if (side < 0.875) list.push([x0 - 2, y0 + Math.random() * (y1 - y0), -10, 0]);
+    else list.push([x1 + 2, y0 + Math.random() * (y1 - y0), 10, 0]);
+  }
+  emit(list);
+}
+
+/** Now and then a shower: streaks fall from above the view, splash on the
+ *  page's objects and join the rest of the liquid. */
+function rain(dt, t) {
+  const R = S.rain;
+  if (t > R.next && t > R.until) {
+    R.until = t + 5 + Math.random() * 5;
+    R.next = R.until + 18 + Math.random() * 22;
+    R.wind = (Math.random() - 0.5) * 160;
+  }
+  if (t > R.until) return;
+  R.acc += dt * 32;
+  const list = [];
+  while (R.acc >= 1) {
+    R.acc -= 1;
+    const x = Math.random() * S.W;
+    const y = scrollY - 6 - Math.random() * 30;
+    const v = 650 + Math.random() * 250;
+    // a drop is a short vertical streak of three particles
+    for (let k = 0; k < 3; k++) list.push([x - R.wind * k * 0.004, y - k * 4, R.wind, v]);
+  }
+  emit(list);
 }
 
 function writeParams() {
   const f = new Float32Array(128);
   const u = new Uint32Array(f.buffer);
   f.set([S.W, S.PH, H, RHO0, 0.16, 0.4, DT, 1400], 0);
-  f[8] = 0.08; u[9] = S.n; u[10] = S.gridW; u[11] = S.gridH;
+  f[8] = 0.08; u[9] = S.active; u[10] = S.gridW; u[11] = S.gridH;
   f.set([mouse.x, mouse.y + scrollY, mouse.vx, mouse.vy], 12);
   f[16] = 46; f[17] = mouse.down && mouse.moved > 4 ? 1 : 0; u[18] = S.obs.length; u[19] = S.cells;
   f[20] = 900;
@@ -533,6 +593,11 @@ function frame(now) {
   const dt = (now - last) / 1000;
   last = now;
   fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
+  const t = now / 1000;
+  if (dt < 0.25) {
+    seep(dt);
+    rain(dt, t);
+  }
   mouse.vx *= 0.85;
   mouse.vy *= 0.85;
   writeParams();
@@ -542,9 +607,9 @@ function frame(now) {
   const enc = device.createCommandEncoder();
   const cp = enc.beginComputePass();
   cp.setBindGroup(0, S.simBG);
-  const pg = Math.ceil(S.n / 64);
+  const pg = Math.ceil(S.active / 64);
   const cg = Math.ceil(S.cells / 64);
-  for (let s = 0; s < SUBSTEPS; s++) {
+  for (let s = 0; s < (S.active ? SUBSTEPS : 0); s++) {
     for (const [k, g] of [['predict', pg], ['clearCounts', cg], ['count', pg], ['scan', 1], ['scatter', pg], ['density', pg], ['relax', pg], ['finalize', pg]]) {
       cp.setPipeline(K[k]);
       cp.dispatchWorkgroups(g);
@@ -555,7 +620,7 @@ function frame(now) {
   const sp = enc.beginRenderPass({ colorAttachments: [{ view: S.field.createView(), loadOp: 'clear', clearValue: [0, 0, 0, 0], storeOp: 'store' }] });
   sp.setPipeline(splatPipe);
   sp.setBindGroup(0, S.splatBG);
-  sp.draw(4, S.n);
+  if (S.active) sp.draw(4, S.active);
   sp.end();
 
   const rp = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }] });
@@ -581,7 +646,7 @@ canvas.addEventListener('pointermove', (e) => {
   Object.assign(mouse, { x: e.clientX, y: e.clientY, t: e.timeStamp });
 });
 const up = () => {
-  if (mouse.down && mouse.moved < 6) spawn(mouse.x, mouse.y + scrollY, 0, 60, Math.round(S.n * 0.06));
+  if (mouse.down && mouse.moved < 6) spawn(mouse.x, mouse.y + scrollY, 0, 60, 120);
   mouse.down = false;
 };
 canvas.addEventListener('pointerup', up);
