@@ -1,39 +1,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>METIQ Liquid Lab</title>
-<meta name="description" content="WebGPU compute-shader liquid flowing over a 1996 home page">
+<meta name="description" content="WebGPU compute-shader liquid on the METIQ home page">
 <style>
-/* One deliberate look: a 1996 page under real-time liquid. Colours are fixed. */
-:root { --page: #dcdcdc; --ink: #000; --navy: #000080; --panel: #c0c0c0; --hi: #ffffff; --lo: #808080; color-scheme: light; }
-html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink); overflow: hidden; }
-#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; cursor: crosshair; }
-#ui {
-  position: fixed; left: 12px; bottom: 12px; z-index: 2; max-width: calc(100vw - 24px); box-sizing: border-box;
-  background: var(--panel); border: 2px solid; border-color: var(--hi) var(--lo) var(--lo) var(--hi);
-  padding: 6px 8px; font: 12px "MS PGothic", "Hiragino Kaku Gothic ProN", sans-serif;
-  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-}
-#ui b { color: var(--navy); }
-#ui button {
-  font: inherit; background: var(--panel); color: var(--ink); padding: 2px 8px; cursor: pointer;
-  border: 2px solid; border-color: var(--hi) var(--lo) var(--lo) var(--hi);
-}
-#ui button:active, #ui button[aria-pressed="true"] { border-color: var(--lo) var(--hi) var(--hi) var(--lo); }
-#ui button:focus-visible { outline: 1px dotted var(--ink); outline-offset: -4px; }
-#stat { font-family: "Courier New", monospace; min-width: 9em; }
+/* The page underneath is a snapshot of the real home page; the liquid is drawn
+   over it. Fixed colours: this is the 1996 page, it has no dark mode. */
+:root { --page: #dcdcdc; --ink: #000; color-scheme: light; }
+html, body { margin: 0; background: var(--page); color: var(--ink); }
+#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: pan-y; cursor: crosshair; }
+#scroll { width: 1px; }
 #nogpu { position: fixed; inset: 0; display: none; place-items: center; padding: 16px; text-align: center; background: var(--page); font: 16px "MS PGothic", sans-serif; }
 #nogpu p { max-width: 32em; }
 </style>
 
 <canvas id="gl"></canvas>
-<div id="ui" role="group" aria-label="操作">
-  <b>WebGPU 液体実験室</b>
-  <button id="pour" type="button">注ぐ</button>
-  <button id="reset" type="button">リセット</button>
-  <button id="retro" type="button" aria-pressed="false">256色モード</button>
-  <span id="stat">起動中…</span>
-  <span>ドラッグでかき混ぜる・クリック/タップで注ぐ</span>
-</div>
+<div id="scroll"></div>
 <div id="nogpu"><p>このブラウザでは WebGPU が使えません。<br>最新の Chrome / Edge / Safari（iOS 26 以降）/ Firefox でお試しください。</p></div>
 
 <script type="module">
@@ -56,12 +37,16 @@ html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink)
 //   composite iso-surface of the field, normal from its gradient; refraction of
 //             the 1996 page behind it, Beer–Lambert tint by thickness, Schlick
 //             Fresnel to an environment, two-lobe Blinn specular, meniscus line,
-//             cast shadow; optional Bayer-dithered 216-colour "256色モード".
+//             cast shadow.
+//
+// The page underneath is the real home page (site/lab/page.jpg, written by
+// tools/lab_snapshot.cjs, with page.json giving its tables and pictures as
+// colliders). The simulation lives in page coordinates, so the liquid stays
+// on the page while you scroll it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
-const stat = $('#stat');
 
 if (!navigator.gpu) fail();
 const adapter = navigator.gpu && (await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }));
@@ -74,7 +59,6 @@ const format = navigator.gpu.getPreferredCanvasFormat();
 
 function fail() {
   $('#nogpu').style.display = 'grid';
-  $('#ui').style.display = 'none';
   throw new Error('WebGPU unavailable');
 }
 
@@ -85,7 +69,7 @@ const QS = new URLSearchParams(location.search);
 const SUBSTEPS = Math.max(1, Math.min(8, Number(QS.get('sub')) || 4));
 const DT = 1 / 240;
 const STRIDE = 12; // floats per particle: pos, prev, vel, out, dens, vdel
-const MAX_OBS = 6;
+const MAX_OBS = 16;
 
 // ── WGSL ────────────────────────────────────────────────────────────────────
 const COMMON = /* wgsl */ `
@@ -282,7 +266,7 @@ var<workgroup> wsum: array<u32, 256>;
 `;
 
 const SPLAT = /* wgsl */ `${COMMON}
-struct R { size: vec2f, radius: f32, _p: f32 };
+struct R { size: vec2f, radius: f32, scroll: f32 };
 @group(0) @binding(0) var<uniform> U: R;
 @group(0) @binding(1) var<storage, read> parts: array<Particle>;
 struct VO { @builtin(position) pos: vec4f, @location(0) c: vec2f, @location(1) speed: f32 };
@@ -291,7 +275,7 @@ struct VO { @builtin(position) pos: vec4f, @location(0) c: vec2f, @location(1) s
   let c = corners[vi];
   let w = parts[ii].pos + c * U.radius;
   var o: VO;
-  o.pos = vec4f(w.x / U.size.x * 2.0 - 1.0, 1.0 - w.y / U.size.y * 2.0, 0.0, 1.0);
+  o.pos = vec4f(w.x / U.size.x * 2.0 - 1.0, 1.0 - (w.y - U.scroll) / U.size.y * 2.0, 0.0, 1.0);
   o.c = c;
   o.speed = length(parts[ii].vel);
   return o;
@@ -305,7 +289,7 @@ struct VO { @builtin(position) pos: vec4f, @location(0) c: vec2f, @location(1) s
 `;
 
 const COMPOSITE = /* wgsl */ `
-struct C { px: vec2f, fpx: vec2f, retro: f32, thresh: f32, dpr: f32, time: f32 };
+struct C { px: vec2f, fpx: vec2f, bgpx: vec2f, scroll: f32, thresh: f32, dpr: f32, _a: f32, _b: f32, _c: f32 };
 @group(0) @binding(0) var samp: sampler;
 @group(0) @binding(1) var field: texture_2d<f32>;
 @group(0) @binding(2) var bg: texture_2d<f32>;
@@ -315,9 +299,12 @@ struct C { px: vec2f, fpx: vec2f, retro: f32, thresh: f32, dpr: f32, time: f32 }
   return vec4f(p[vi], 0.0, 1.0);
 }
 fn F(uv: vec2f) -> vec2f { return textureSampleLevel(field, samp, uv, 0.0).rg; }
-// mirror at the frame edge so refraction never smears the last row
-fn B(uv: vec2f) -> vec3f { let m = 1.0 - abs(1.0 - abs(uv)); return textureSampleLevel(bg, samp, m, 0.0).rgb; }
-const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+// background lookup by *screen pixel*, mapped into page space; mirrored at the
+// edges so refraction never smears the last row
+fn B(px: vec2f) -> vec3f {
+  let uv = (px + vec2f(0.0, U.scroll)) * U.bgpx;
+  return textureSampleLevel(bg, samp, 1.0 - abs(1.0 - abs(uv)), 0.0).rgb;
+}
 @fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
   let uv = fc.xy * U.px;
   let fr = F(uv);
@@ -329,7 +316,7 @@ const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.
 
   // cast shadow: the field, offset away from the light
   let sh = smoothstep(t * 0.6, t * 2.0, F(uv - vec2f(-6.0, -9.0) * U.px * U.dpr).x);
-  var col = B(uv) * (1.0 - 0.22 * sh);
+  var col = B(fc.xy) * (1.0 - 0.22 * sh);
 
   let inside = smoothstep(t - 0.18, t + 0.18, f);
   if (inside > 0.0) {
@@ -337,7 +324,7 @@ const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.
     let n = normalize(vec3f(-gx * 1.1, -gy * 1.1, 1.0));
     // refraction: the page bends through the liquid
     let off = n.xy * (10.0 + 22.0 * thick) * U.dpr;
-    var base = B(uv + off * U.px);
+    var base = B(fc.xy + off);
     // Beer–Lambert: thicker liquid swallows a little red
     base *= exp(-thick * vec3f(0.28, 0.10, 0.04));
     // Schlick Fresnel against a soft sky
@@ -360,11 +347,6 @@ const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.
     col = mix(col, liq, inside);
   }
 
-  if (U.retro > 0.5) {
-    let b = BAYER[(u32(fc.y) % 4u) * 4u + (u32(fc.x) % 4u)];
-    let th = (b + 0.5) / 16.0;
-    col = min(floor(clamp(col, vec3f(0.0), vec3f(1.0)) * 5.0 + th), vec3f(5.0)) / 5.0;
-  }
   return vec4f(col, 1.0);
 }
 `;
@@ -409,104 +391,37 @@ const compPipe = device.createRenderPipeline({
 });
 const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
 
-// ── the 1996 page we pour onto ──────────────────────────────────────────────
-function drawPage(W, Hh, dpr) {
+// ── the real page we pour onto ──────────────────────────────────────────────
+const asset = (f) => new URL(f, import.meta.url);
+const [PAGE, pageImg, marbleImg] = await Promise.all([
+  fetch(asset('page.json')).then((r) => r.json()),
+  createImageBitmap(await (await fetch(asset('page.jpg'))).blob()),
+  createImageBitmap(await (await fetch(asset('marble.png'))).blob()),
+]);
+
+/** Lay the snapshot out like the browser would: centred, shrunk to fit narrow
+ *  screens, marble on either side. Returns canvas, colliders and page height. */
+function drawPage(W, dpr) {
+  const s = Math.min(1, W / PAGE.width);
+  const ox = (W - PAGE.width * s) / 2;
+  const PH = Math.ceil(PAGE.height * s);
   const c = document.createElement('canvas');
   c.width = Math.round(W * dpr);
-  c.height = Math.round(Hh * dpr);
+  c.height = Math.round(PH * dpr);
   const g = c.getContext('2d');
   g.scale(dpr, dpr);
-  // marble tile
-  const tile = document.createElement('canvas');
-  tile.width = tile.height = 128;
-  const tg = tile.getContext('2d');
-  const img = tg.createImageData(128, 128);
-  for (let y = 0; y < 128; y++)
-    for (let x = 0; x < 128; x++) {
-      const v = Math.sin((x + y) / 128 * Math.PI * 4 + Math.sin(x / 9) * 1.3 + Math.cos(y / 11) * 1.7 + Math.sin((x - y) / 23) * 2);
-      const q = 205 + 26 * v * v + (Math.random() * 6 - 3);
-      const i = (y * 128 + x) * 4;
-      img.data[i] = q * 0.975; img.data[i + 1] = q * 0.985; img.data[i + 2] = q; img.data[i + 3] = 255;
-    }
-  tg.putImageData(img, 0, 0);
-  g.fillStyle = g.createPattern(tile, 'repeat');
-  g.fillRect(0, 0, W, Hh);
-
-  const cx = W / 2;
-  const col = Math.min(640, W - 32);
-  const x0 = cx - col / 2;
-  const obs = [];
-  g.textAlign = 'center';
-  g.fillStyle = '#000080';
-  g.fillRect(x0, 14, col, 22);
-  g.fillStyle = '#FFFF00';
-  g.font = 'bold 14px "MS PGothic", sans-serif';
-  g.fillText('★☆★ ようこそ！ 高IQ団体 METIQ 公式ホームページへ ★☆★', cx, 30);
-
-  g.font = `bold italic ${Math.min(72, W / 7)}px "Times New Roman", serif`;
-  ['#FF0000', '#FF8C00', '#DAA520', '#008000', '#0000FF'].forEach((c, i, a) => {
-    g.fillStyle = c;
-    g.fillText('METIQ'[i], cx + (i - (a.length - 1) / 2) * Math.min(48, W / 10), 110);
-  });
-  g.fillStyle = '#000080';
-  g.font = 'bold 15px "MS PGothic", sans-serif';
-  g.fillText('～ 高IQ団体 OFFICIAL HOME PAGE ～', cx, 136);
-  const grad = g.createLinearGradient(x0 + 60, 0, x0 + col - 60, 0);
-  ['#f00', '#f80', '#ff0', '#0f0', '#0ff', '#00f', '#f0f'].forEach((c, i) => grad.addColorStop(i / 6, c));
-  g.fillStyle = grad;
-  g.fillRect(x0 + 60, 146, col - 120, 4);
-
-  const table = (tx, ty, tw, rows, head) => {
-    const rh = 26;
-    const th = rows.length * rh;
-    g.textAlign = 'left';
-    if (head) {
-      g.fillStyle = '#800000';
-      g.font = 'bold 17px "MS PGothic", sans-serif';
-      g.fillText(head, tx, ty - 10);
-    }
-    g.fillStyle = '#FFFFFF';
-    g.fillRect(tx, ty, tw, th);
-    g.strokeStyle = '#404040';
-    g.lineWidth = 2;
-    g.strokeRect(tx, ty, tw, th);
-    g.lineWidth = 1;
-    g.font = '13px "MS PGothic", sans-serif';
-    rows.forEach((r, i) => {
-      if (i) { g.beginPath(); g.moveTo(tx, ty + i * rh); g.lineTo(tx + tw, ty + i * rh); g.stroke(); }
-      g.fillStyle = '#000';
-      g.fillText(r[0], tx + 8, ty + i * rh + 18);
-      if (r[1]) {
-        g.beginPath(); g.moveTo(tx + 104, ty + i * rh); g.lineTo(tx + 104, ty + (i + 1) * rh); g.stroke();
-        g.fillText(r[1], tx + 112, ty + i * rh + 18);
-      }
-    });
-    obs.push([tx, ty, tx + tw, ty + th]);
-  };
-  table(x0, 196, Math.min(col * 0.72, col), [['2026.10.12', '公式ホームページをリニューアルしました！'], ['2026.10.12', 'アクセスカウンターを設置しました。']], '■ 新着情報 ■');
-
-  g.fillStyle = '#800000';
-  g.font = 'bold 17px "MS PGothic", sans-serif';
-  g.fillText('■ METIQとは ■', x0, 300);
-  g.fillStyle = '#000';
-  g.font = '14px "MS PGothic", sans-serif';
-  const para = '2016年現在、他の先進諸国に比べ、高IQ団体が極端に少ない日本。高いIQを持つ方々の交流の場は非常に限られています。「METIQ」は全人類の上位0.01%に入るIQを持つ方であれば誰でも入会することができます。';
-  let line = '';
-  let ly = 326;
-  for (const ch of para) {
-    if (g.measureText(line + ch).width > col - 24) { g.fillText(line, x0 + 24, ly); line = ''; ly += 21; }
-    line += ch;
-  }
-  g.fillText(line, x0 + 24, ly);
-
-  const tw2 = Math.min(300, col * 0.6);
-  table(x0 + col - tw2, ly + 40, tw2, [['IQ 156', 'SD 15 Wechsler'], ['IQ 160', 'SD 16 Stanford-Binet'], ['IQ 190', 'SD 24']], null);
-  return { canvas: c, obs };
+  const pat = g.createPattern(marbleImg, 'repeat');
+  pat.setTransform(new DOMMatrix().translate(ox, 0).scale(s));
+  g.fillStyle = pat;
+  g.fillRect(0, 0, W, PH);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(pageImg, ox, 0, PAGE.width * s, PH);
+  const obs = PAGE.objs.map(([x0, y0, x1, y1]) => [ox + x0 * s, y0 * s, ox + x1 * s, y1 * s]);
+  return { canvas: c, obs, PH, s, ox };
 }
 
 // ── state ───────────────────────────────────────────────────────────────────
 let S = null;
-let retro = false;
 const mouse = { x: 0, y: 0, vx: 0, vy: 0, down: false, moved: 0, t: 0 };
 
 function lattice() {
@@ -529,9 +444,12 @@ function build() {
   canvas.height = Math.round(Hh * dpr);
   ctx.configure({ device, format, alphaMode: 'opaque' });
 
-  const n = Number(QS.get('n')) || Math.max(3000, Math.min(14000, Math.round((W * Hh) / 95)));
+  const page = drawPage(W, dpr);
+  const PH = page.PH;
+  $('#scroll').style.height = `${PH}px`;
+  const n = Number(QS.get('n')) || Math.max(3000, Math.min(14000, Math.round((W * Math.min(PH, Hh * 1.4)) / 95)));
   const gridW = Math.ceil(W / H) + 1;
-  const gridH = Math.ceil(Hh / H) + 1;
+  const gridH = Math.ceil(PH / H) + 1;
   const cells = gridW * gridH;
 
   const mk = (size, usage) => device.createBuffer({ size, usage });
@@ -541,27 +459,26 @@ function build() {
   const counts = mk(cells * 4, ST);
   const offsets = mk(cells * 4, ST);
   const sorted = mk(n * 4, ST);
-  const params = mk(256, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const params = mk(512, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const simBG = device.createBindGroup({
     layout: simLayout,
     entries: [params, parts, cr, counts, offsets, sorted].map((buffer, binding) => ({ binding, resource: { buffer } })),
   });
 
-  const page = drawPage(W, Hh, dpr);
   const bgTex = device.createTexture({
-    size: [canvas.width, canvas.height],
+    size: [page.canvas.width, page.canvas.height],
     format: 'rgba8unorm',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
   });
-  device.queue.copyExternalImageToTexture({ source: page.canvas }, { texture: bgTex }, [canvas.width, canvas.height]);
+  device.queue.copyExternalImageToTexture({ source: page.canvas }, { texture: bgTex }, [page.canvas.width, page.canvas.height]);
 
   const FW = Math.ceil(canvas.width / 2);
   const FH = Math.ceil(canvas.height / 2);
   const field = device.createTexture({ size: [FW, FH], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
   const splatU = mk(16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  device.queue.writeBuffer(splatU, 0, new Float32Array([W, Hh, H * 1.25, 0]));
+  
   const splatBG = device.createBindGroup({ layout: splatLayout, entries: [{ binding: 0, resource: { buffer: splatU } }, { binding: 1, resource: { buffer: parts } }] });
-  const compU = mk(32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const compU = mk(48, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const compBG = device.createBindGroup({
     layout: compPipe.getBindGroupLayout(0),
     entries: [
@@ -572,10 +489,10 @@ function build() {
     ],
   });
 
-  S = { W, Hh, dpr, n, gridW, gridH, cells, parts, params, simBG, field, splatBG, compBG, compU, obs: page.obs.slice(0, MAX_OBS), next: 0 };
+  S = { W, Hh, PH, dpr, n, gridW, gridH, cells, parts, params, simBG, field, splatBG, splatU, compBG, compU, bgW: page.canvas.width, bgH: page.canvas.height, obs: page.obs.slice(0, MAX_OBS), next: 0 };
   // start with a heavy blob over the logo, keep the rest for pouring
   const blob = Math.round(n * 0.55);
-  spawn(W * 0.5, 40 + Math.sqrt(blob) * SPACING * 0.5, 0, 120, blob);
+  spawn(W * 0.5, scrollY + 30 + Math.sqrt(blob) * SPACING * 0.5, 0, 120, blob);
 }
 
 /** Write `count` particles as a dense disc at (x, y) moving with (vx, vy). */
@@ -587,7 +504,7 @@ function spawn(x, y, vx, vy, count) {
     const r = Math.sqrt(k + 0.5) * SPACING * 0.56;
     const a = k * 2.399963;
     const px = Math.min(S.W - 4, Math.max(4, x + Math.cos(a) * r));
-    const py = Math.min(S.Hh - 4, Math.max(4, y + Math.sin(a) * r));
+    const py = Math.min(S.PH - 4, Math.max(4, y + Math.sin(a) * r));
     buf.set([px, py, px - vx * DT, py - vy * DT, vx, vy, px, py, 0, 0, 0, 0], k * STRIDE);
   }
   // ring buffer: the oldest liquid is recycled
@@ -598,11 +515,11 @@ function spawn(x, y, vx, vy, count) {
 }
 
 function writeParams() {
-  const f = new Float32Array(64);
+  const f = new Float32Array(128);
   const u = new Uint32Array(f.buffer);
-  f.set([S.W, S.Hh, H, RHO0, 0.16, 0.4, DT, 1400], 0);
+  f.set([S.W, S.PH, H, RHO0, 0.16, 0.4, DT, 1400], 0);
   f[8] = 0.08; u[9] = S.n; u[10] = S.gridW; u[11] = S.gridH;
-  f.set([mouse.x, mouse.y, mouse.vx, mouse.vy], 12);
+  f.set([mouse.x, mouse.y + scrollY, mouse.vx, mouse.vy], 12);
   f[16] = 46; f[17] = mouse.down && mouse.moved > 4 ? 1 : 0; u[18] = S.obs.length; u[19] = S.cells;
   f[20] = 900;
   S.obs.forEach((o, i) => f.set(o, 24 + i * 4));
@@ -619,7 +536,8 @@ function frame(now) {
   mouse.vx *= 0.85;
   mouse.vy *= 0.85;
   writeParams();
-  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, retro ? 1 : 0, 0.9, S.dpr, now / 1000]));
+  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, 1 / S.bgW, 1 / S.bgH, scrollY * S.dpr, 0.9, S.dpr, 0, 0, 0]));
+  device.queue.writeBuffer(S.splatU, 0, new Float32Array([S.W, S.Hh, H * 1.25, scrollY]));
 
   const enc = device.createCommandEncoder();
   const cp = enc.beginComputePass();
@@ -647,7 +565,6 @@ function frame(now) {
   rp.end();
   device.queue.submit([enc.finish()]);
 
-  stat.textContent = `${S.n.toLocaleString()}粒 / ${fps.toFixed(0)} fps`;
   requestAnimationFrame(frame);
 }
 
@@ -664,17 +581,11 @@ canvas.addEventListener('pointermove', (e) => {
   Object.assign(mouse, { x: e.clientX, y: e.clientY, t: e.timeStamp });
 });
 const up = () => {
-  if (mouse.down && mouse.moved < 6) spawn(mouse.x, mouse.y, 0, 60, Math.round(S.n * 0.06));
+  if (mouse.down && mouse.moved < 6) spawn(mouse.x, mouse.y + scrollY, 0, 60, Math.round(S.n * 0.06));
   mouse.down = false;
 };
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', () => (mouse.down = false));
-$('#pour').addEventListener('click', () => spawn(S.W * (0.25 + 0.5 * Math.random()), 30, 0, 200, Math.round(S.n * 0.12)));
-$('#reset').addEventListener('click', build);
-$('#retro').addEventListener('click', (e) => {
-  retro = !retro;
-  e.currentTarget.setAttribute('aria-pressed', String(retro));
-});
 let rt = 0;
 addEventListener('resize', () => {
   clearTimeout(rt);
