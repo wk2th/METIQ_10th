@@ -1,12 +1,13 @@
 // life.mjs — objects (bordered tables, picture surfaces) that come alive near
 // the pointer: a membrane that undulates (SVG turbulence → displacement, one
-// filter per object), a slow squash-and-stretch breath, sudden fibrillation
-// bursts, and droplets that bud on the lower edge, neck out and fall.
+// filter per object), a slow squash-and-stretch breath, corners that soften
+// and round off, sudden fibrillation bursts, and clear glossy droplets that
+// bud on the lower edge, neck out and fall.
 // Computed in core/src/life.rs; nothing is applied while nobody is near, so
 // a still page carries no filter, no scale, no drops.
 
 const TARGETS = 'table[border]:not([border="0"]), canvas[data-surface]';
-const OUT = 6;
+const OUT = 10;
 const DROP = 7;
 const SVGNS = 'http://www.w3.org/2000/svg';
 
@@ -18,7 +19,6 @@ export class Life {
     this.out = k.f32(k.x.life_out(), 16 * OUT);
     this.drops = k.f32(k.x.life_drops(), 1 + 64 * DROP);
     this.applied = new Uint8Array(this.objs.length);
-    this.ink = this.objs.map(() => '#506c84');
     this.pointer = { x: -1e9, y: -1e9 };
 
     const svg = document.createElementNS(SVGNS, 'svg');
@@ -57,27 +57,6 @@ export class Life {
     addEventListener('touchstart', (e) => track(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
     addEventListener('touchmove', (e) => track(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
     addEventListener('touchend', () => (this.pointer.x = this.pointer.y = -1e9), { passive: true });
-    setInterval(() => this.sampleInk(), 2000);
-    this.sampleInk();
-  }
-
-  /** Droplet colour = what the object's lower edge is made of. */
-  sampleInk() {
-    this.objs.forEach((el, i) => {
-      try {
-        if (el instanceof HTMLCanvasElement) {
-          // copy one pixel into our own read-optimised canvas, don't read back the surface
-          this.probe ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-          this.probe.clearRect(0, 0, 1, 1);
-          this.probe.drawImage(el, (el.width / 2) | 0, Math.max(0, el.height - 3), 1, 1, 0, 0, 1, 1);
-          const d = this.probe.getImageData(0, 0, 1, 1).data;
-          if (d[3] > 0) this.ink[i] = `rgb(${d[0]} ${d[1]} ${d[2]})`;
-        } else {
-          const cs = getComputedStyle(el);
-          this.ink[i] = cs.borderBottomColor || '#506c84';
-        }
-      } catch {}
-    });
   }
 
   step(dt, t, energy) {
@@ -99,7 +78,7 @@ export class Life {
       const st = el.style;
       if (o[b] < 0.12) {
         if (this.applied[i]) {
-          st.filter = st.scale = '';
+          st.filter = st.scale = st.borderRadius = st.clipPath = '';
           this.applied[i] = 0;
         }
         return;
@@ -110,6 +89,11 @@ export class Life {
       f.turb.setAttribute('seed', String(o[b + 3] | 0));
       st.filter = `url(#cell-${i})`;
       st.scale = `${o[b + 4].toFixed(4)} ${o[b + 5].toFixed(4)}`;
+      // softened corners: radius draws the border round, the clip keeps cell
+      // backgrounds from poking out past it
+      const rr = [6, 7, 8, 9].map((k) => `${o[b + k].toFixed(1)}px`).join(' ');
+      st.borderRadius = rr;
+      st.clipPath = `inset(0 round ${rr})`;
       this.applied[i] = 1;
     });
 
@@ -141,14 +125,16 @@ export class Life {
       const b = 1 + i * DROP;
       const x = D[b] - scrollX;
       const y = D[b + 1] - scrollY;
-      const r = Math.max(0.5, D[b + 2]);
+      const r = Math.max(0.6, D[b + 2]);
       const neck = D[b + 3];
       const stretch = D[b + 4];
-      g.fillStyle = this.ink[D[b + 6] | 0];
-      g.globalAlpha = 0.92;
+      const hanging = D[b + 5] > 0;
+      const rx = hanging ? r : r / Math.sqrt(stretch);
+      const ry = hanging ? r : r * stretch;
+
       g.beginPath();
-      if (D[b + 5]) {
-        // still hanging: a neck from the edge down to the bulb
+      if (hanging) {
+        // a neck from the edge down to the bulb
         const ey = y - r - neck;
         const w0 = r * 1.5;
         g.moveTo(x - w0, ey);
@@ -158,18 +144,44 @@ export class Life {
         g.closePath();
       } else {
         // falling: a teardrop pulled long by its speed
-        const rx = r / Math.sqrt(stretch);
-        const ry = r * stretch;
         g.moveTo(x, y - ry * 2.2);
         g.bezierCurveTo(x + rx * 0.4, y - ry * 1.2, x + rx, y - ry * 0.4, x + rx, y);
         g.arc(x, y, rx, 0, Math.PI, false);
         g.bezierCurveTo(x - rx, y - ry * 0.4, x - rx * 0.4, y - ry * 1.2, x, y - ry * 2.2);
       }
+
+      // clear body: almost nothing in the middle, thicker (darker) at the rim
+      const body = g.createRadialGradient(x - rx * 0.25, y - ry * 0.3, 0, x, y, Math.max(rx, ry) * 1.25);
+      body.addColorStop(0, 'rgb(255 255 255 / .05)');
+      body.addColorStop(0.62, 'rgb(170 200 225 / .10)');
+      body.addColorStop(0.9, 'rgb(70 105 140 / .32)');
+      body.addColorStop(1, 'rgb(40 70 100 / .45)');
+      g.fillStyle = body;
       g.fill();
-      g.globalAlpha = 0.75;
-      g.fillStyle = '#FFFFFF';
+      g.lineWidth = 0.7;
+      g.strokeStyle = 'rgb(30 55 85 / .5)';
+      g.stroke();
+
+      // caustic: light focused through the drop onto its lower inside edge
       g.beginPath();
-      g.arc(x - r * 0.35, y - r * 0.35, r * 0.28, 0, Math.PI * 2);
+      g.ellipse(x, y + ry * 0.12, rx * 0.72, ry * 0.72, 0, Math.PI * 0.18, Math.PI * 0.82);
+      g.lineWidth = Math.max(0.8, r * 0.2);
+      g.lineCap = 'round';
+      g.strokeStyle = 'rgb(255 255 255 / .6)';
+      g.stroke();
+
+      // specular highlight + glint
+      g.save();
+      g.translate(x - rx * 0.36, y - ry * 0.4);
+      g.rotate(-0.6);
+      g.beginPath();
+      g.ellipse(0, 0, rx * 0.3, ry * 0.17, 0, 0, Math.PI * 2);
+      g.fillStyle = 'rgb(255 255 255 / .9)';
+      g.fill();
+      g.restore();
+      g.beginPath();
+      g.arc(x + rx * 0.3, y + ry * 0.05, Math.max(0.5, r * 0.08), 0, Math.PI * 2);
+      g.fillStyle = 'rgb(255 255 255 / .8)';
       g.fill();
     }
     g.globalAlpha = 1;
@@ -178,7 +190,7 @@ export class Life {
   calm() {
     this.k.x.life_reset();
     this.objs.forEach((el, i) => {
-      if (this.applied[i] && !this.busy(el)) el.style.filter = el.style.scale = '';
+      if (this.applied[i] && !this.busy(el)) el.style.filter = el.style.scale = el.style.borderRadius = el.style.clipPath = '';
       this.applied[i] = 0;
     });
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);

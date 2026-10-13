@@ -11,10 +11,12 @@
 //!            the displacement scale and slowly drift the noise frequency so
 //!            the whole thing undulates like cytoplasm
 //!  breath    anti-phase squash/stretch (sx = 1 + ε·sin ωt, sy = 1 − ε·sin ωt)
+//!  softening corners round off, each on its own slow phase, like a cell
+//!            losing its box shape
 //!  fibrillation  Poisson-scheduled bursts (∝ a) of fast, irregular tremor:
 //!            displacement spikes and the noise seed re-rolled every frame
-//!  droplets  bulbs swell on the lower edge, neck out, pinch off and fall
-//!            (g = 1100 px/s²), stretching with speed
+//!  droplets  clear, glossy bulbs swell on the lower edge, neck out, pinch
+//!            off and fall (g = 1100 px/s²), stretching with speed
 //! ```
 
 use crate::math::{abs, damp, max, min, sat, sin};
@@ -23,7 +25,7 @@ use crate::Slot;
 
 pub const MAXO: usize = 16;
 const MAXD: usize = 64;
-const OUT: usize = 6; // displacement, freq x, freq y, seed, sx, sy
+const OUT: usize = 10; // displacement, freq x, freq y, seed, sx, sy, radius tl/tr/br/bl
 const DROP: usize = 7; // x, y, r, neck, stretch, attached, object
 
 #[derive(Clone, Copy)]
@@ -151,6 +153,11 @@ pub extern "C" fn life_step(n: u32, dt: f32, t: f32, mx: f32, my: f32, energy: f
             let sq = a * 0.010 * sin(t * 2.3 + o.phase) + fib * 0.006 * sin(t * 61.0 + o.phase);
             l.out[b + 4] = 1.0 + sq;
             l.out[b + 5] = 1.0 - sq;
+            let rmax = min(min(o.w, o.h) * 0.32, 22.0) * a;
+            for k in 0..4 {
+                let wob = 0.55 + 0.45 * sin(t * (0.7 + 0.13 * k as f32) + o.phase + k as f32 * 1.9);
+                l.out[b + 6 + k] = rmax * wob;
+            }
         }
 
         // droplets bud while the cell is active
@@ -158,7 +165,7 @@ pub extern "C" fn life_step(n: u32, dt: f32, t: f32, mx: f32, my: f32, energy: f
         if o.drip <= 0.0 && a > 0.2 {
             o.drip = 0.8 + rng.f01() * 1.6;
             if let Some(d) = l.d.iter_mut().find(|d| !d.live) {
-                let rmax = 2.2 + rng.f01() * 3.6;
+                let rmax = 3.0 + rng.f01() * 5.0;
                 *d = Drop { obj: i, u: 0.08 + 0.84 * rng.f01(), x: 0.0, y: 0.0, vy: 0.0, r: 0.0, rmax, age: 0.0, grow: 0.6 + rng.f01() * 0.9, falling: false, live: true };
             }
         }

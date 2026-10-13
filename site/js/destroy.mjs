@@ -69,7 +69,7 @@ export class Destroyer {
     // page is shown scaled (CSS zoom on <body>, e.g. on a phone), local px ×
     // z = document px; vx()/vy() take local points to the viewport.
     // take the element over from life.mjs: no membrane / breath on shards
-    el.style.filter = el.style.scale = '';
+    el.style.filter = el.style.scale = el.style.borderRadius = el.style.clipPath = '';
     const z = parseFloat(document.body.style.zoom) || 1;
     this.z = z;
     const r = el.getBoundingClientRect();
