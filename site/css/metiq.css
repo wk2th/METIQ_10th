@@ -88,3 +88,13 @@ canvas[data-surface="globe"]:active { cursor: grabbing; }
 }
 #drops[hidden] { display: none; }
 @media print { #drops { display: none !important; } }
+
+#liquid {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 2147482980;
+}
+#liquid[hidden] { display: none; }
+@media print { #liquid { display: none !important; } }

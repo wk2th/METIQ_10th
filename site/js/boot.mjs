@@ -7,6 +7,7 @@
 //                                          ├─► *_render     (GIF surfaces)
 //                                          └─► fx_glitch    (tear events)
 //   near an object ──► life_*  (membrane, breath, fibrillation, droplets)
+//   alive objects / rain ──► liquid (WebGPU compute: seeping, dripping water)
 //   ~10 s ──► destroy_*       (electric / rust / lightning / meteor / hack, re-form)
 //   capture precursor ──► fx_calm + DOM reset, synchronously
 
@@ -15,6 +16,7 @@ import { GlyphField } from './glyphs.mjs';
 import { Destroyer } from './destroy.mjs';
 import { TouchFx } from './touch.mjs';
 import { Life } from './life.mjs';
+import { Liquid } from './liquid.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
@@ -58,6 +60,13 @@ async function main() {
   const destroyer = new Destroyer(k, field);
   const touchFx = new TouchFx(k, field, () => t, () => reduced.matches);
   const life = new Life(k, (el) => destroyer.el === el);
+  // real water where WebGPU exists; otherwise life.mjs keeps its 2D drops
+  let liquid = null;
+  if (!reduced.matches)
+    Liquid.create().then((l) => {
+      liquid = l;
+      if (l) life.dropsEnabled = false;
+    });
   const { list: surfaces, byName } = mountSurfaces(k);
   const overlay = new Overlay(k);
 
@@ -77,6 +86,7 @@ async function main() {
     destroyer.restore();
     touchFx.calm();
     life.calm();
+    liquid?.calm();
     field.calm();
     overlay.calm();
     document.body.classList.remove('glitch');
@@ -158,6 +168,7 @@ async function main() {
     if (!reduced.matches) destroyer.step(t);
     touchFx.step(dt);
     if (!reduced.matches) life.step(dt, t, energy);
+    liquid?.step(dt, t, energy, life.alive());
     field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);

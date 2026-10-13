@@ -19,6 +19,8 @@ export class Life {
     this.out = k.f32(k.x.life_out(), 16 * OUT);
     this.drops = k.f32(k.x.life_drops(), 1 + 64 * DROP);
     this.applied = new Uint8Array(this.objs.length);
+    this.rects = [];
+    this.dropsEnabled = true; // off once the WebGPU liquid takes over
     this.pointer = { x: -1e9, y: -1e9 };
 
     const svg = document.createElementNS(SVGNS, 'svg');
@@ -64,6 +66,7 @@ export class Life {
     const n = this.objs.length;
     this.objs.forEach((el, i) => {
       const r = el.getBoundingClientRect();
+      this.rects[i] = [r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY];
       x.life_set(i, r.left + scrollX, r.top + scrollY, r.width, r.height);
     });
     x.life_step(n, dt, t, this.pointer.x, this.pointer.y, energy, scrollY + innerHeight);
@@ -97,7 +100,7 @@ export class Life {
       this.applied[i] = 1;
     });
 
-    this.drawDrops();
+    if (this.dropsEnabled) this.drawDrops();
   }
 
   drawDrops() {
@@ -185,6 +188,11 @@ export class Life {
       g.fill();
     }
     g.globalAlpha = 1;
+  }
+
+  /** Rectangles (document px) of the objects that are alive right now. */
+  alive() {
+    return this.rects.filter((_, i) => this.applied[i]);
   }
 
   calm() {
