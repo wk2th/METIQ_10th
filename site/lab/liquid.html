@@ -1,0 +1,682 @@
+<title>METIQ Liquid Lab</title>
+<meta name="description" content="WebGPU compute-shader liquid flowing over a 1996 home page">
+<style>
+/* One deliberate look: a 1996 page under real-time liquid. Colours are fixed. */
+:root { --page: #dcdcdc; --ink: #000; --navy: #000080; --panel: #c0c0c0; --hi: #ffffff; --lo: #808080; color-scheme: light; }
+html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink); overflow: hidden; }
+#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; cursor: crosshair; }
+#ui {
+  position: fixed; left: 12px; bottom: 12px; z-index: 2; max-width: calc(100vw - 24px); box-sizing: border-box;
+  background: var(--panel); border: 2px solid; border-color: var(--hi) var(--lo) var(--lo) var(--hi);
+  padding: 6px 8px; font: 12px "MS PGothic", "Hiragino Kaku Gothic ProN", sans-serif;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+#ui b { color: var(--navy); }
+#ui button {
+  font: inherit; background: var(--panel); color: var(--ink); padding: 2px 8px; cursor: pointer;
+  border: 2px solid; border-color: var(--hi) var(--lo) var(--lo) var(--hi);
+}
+#ui button:active, #ui button[aria-pressed="true"] { border-color: var(--lo) var(--hi) var(--hi) var(--lo); }
+#ui button:focus-visible { outline: 1px dotted var(--ink); outline-offset: -4px; }
+#stat { font-family: "Courier New", monospace; min-width: 9em; }
+#nogpu { position: fixed; inset: 0; display: none; place-items: center; padding: 16px; text-align: center; background: var(--page); font: 16px "MS PGothic", sans-serif; }
+#nogpu p { max-width: 32em; }
+</style>
+
+<canvas id="gl"></canvas>
+<div id="ui" role="group" aria-label="操作">
+  <b>WebGPU 液体実験室</b>
+  <button id="pour" type="button">注ぐ</button>
+  <button id="reset" type="button">リセット</button>
+  <button id="retro" type="button" aria-pressed="false">256色モード</button>
+  <span id="stat">起動中…</span>
+  <span>ドラッグでかき混ぜる・クリック/タップで注ぐ</span>
+</div>
+<div id="nogpu"><p>このブラウザでは WebGPU が使えません。<br>最新の Chrome / Edge / Safari（iOS 26 以降）/ Firefox でお試しください。</p></div>
+
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// METIQ Liquid Lab — everything moving here runs on the GPU.
+//
+// Simulation (WGSL compute, per substep):
+//   predict   v += g·dt (+ stir), x_prev = x, x += v·dt
+//   grid      clear → count (atomicAdd, keeps per-cell rank) → exclusive scan
+//             (one 256-thread workgroup, Hillis–Steele) → scatter = counting sort
+//   density   ρ = Σ(1−q)², ρ_near = Σ(1−q)³ over the 3×3 cell neighbourhood,
+//             plus an XSPH velocity blend (viscosity)
+//   relax     double-density relaxation (Clavet et al. 2005), gathered so each
+//             thread only writes its own particle: D = (P̄(1−q) + P̄ₙ(1−q)²)·h/2
+//   finalize  collide with walls + the page's tables, surface adhesion (that is
+//             what makes it cling and drip), v = (x − x_prev)/dt
+//
+// Rendering:
+//   splat     instanced gaussian quads → additive half-res rgba16float field
+//   composite iso-surface of the field, normal from its gradient; refraction of
+//             the 1996 page behind it, Beer–Lambert tint by thickness, Schlick
+//             Fresnel to an environment, two-lobe Blinn specular, meniscus line,
+//             cast shadow; optional Bayer-dithered 216-colour "256色モード".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const $ = (s) => document.querySelector(s);
+const canvas = $('#gl');
+const stat = $('#stat');
+
+if (!navigator.gpu) fail();
+const adapter = navigator.gpu && (await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }));
+if (!adapter) fail();
+const device = await adapter.requestDevice();
+device.lost.then((info) => { console.error('[WebGPU] device lost:', info.reason, info.message); fail(); });
+device.addEventListener('uncapturederror', (e) => console.error('[WebGPU]', e.error.message));
+const ctx = canvas.getContext('webgpu');
+const format = navigator.gpu.getPreferredCanvasFormat();
+
+function fail() {
+  $('#nogpu').style.display = 'grid';
+  $('#ui').style.display = 'none';
+  throw new Error('WebGPU unavailable');
+}
+
+// ── constants ───────────────────────────────────────────────────────────────
+const H = 12; // interaction radius, CSS px
+const SPACING = H * 0.45;
+const QS = new URLSearchParams(location.search);
+const SUBSTEPS = Math.max(1, Math.min(8, Number(QS.get('sub')) || 4));
+const DT = 1 / 240;
+const STRIDE = 12; // floats per particle: pos, prev, vel, out, dens, vdel
+const MAX_OBS = 6;
+
+// ── WGSL ────────────────────────────────────────────────────────────────────
+const COMMON = /* wgsl */ `
+struct Particle { pos: vec2f, prev: vec2f, vel: vec2f, out: vec2f, dens: vec2f, vdel: vec2f };
+struct Params {
+  size: vec2f, h: f32, rho0: f32,
+  k: f32, kn: f32, dt: f32, g: f32,
+  visc: f32, n: u32, gridW: u32, gridH: u32,
+  mouse: vec4f,
+  mouseR: f32, mouseOn: f32, nObs: u32, cells: u32,
+  adhesion: f32, _a: f32, _b: f32, _c: f32,
+  obs: array<vec4f, ${MAX_OBS}>,
+};
+`;
+
+const SIM = /* wgsl */ `${COMMON}
+@group(0) @binding(0) var<uniform> P: Params;
+@group(0) @binding(1) var<storage, read_write> parts: array<Particle>;
+@group(0) @binding(2) var<storage, read_write> cr: array<vec2u>;
+@group(0) @binding(3) var<storage, read_write> counts: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> offsets: array<u32>;
+@group(0) @binding(5) var<storage, read_write> sorted: array<u32>;
+
+fn cellOf(p: vec2f) -> vec2i {
+  return clamp(vec2i(floor(p / P.h)), vec2i(0), vec2i(i32(P.gridW) - 1, i32(P.gridH) - 1));
+}
+fn cellIdx(c: vec2i) -> u32 { return u32(c.y) * P.gridW + u32(c.x); }
+
+@compute @workgroup_size(64) fn predict(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= P.n) { return; }
+  var p = parts[i];
+  var v = p.vel + vec2f(0.0, P.g) * P.dt;
+  if (P.mouseOn > 0.5) {
+    let d = p.pos - P.mouse.xy;
+    let r = length(d);
+    if (r < P.mouseR) {
+      let w = 1.0 - r / P.mouseR;
+      v += (P.mouse.zw - v) * w * 0.2;
+    }
+  }
+  p.prev = p.pos;
+  p.pos += v * P.dt;
+  p.vel = v;
+  parts[i] = p;
+}
+
+@compute @workgroup_size(64) fn clearCounts(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x < P.cells) { atomicStore(&counts[id.x], 0u); }
+}
+
+@compute @workgroup_size(64) fn count(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= P.n) { return; }
+  let c = cellIdx(cellOf(parts[i].pos));
+  cr[i] = vec2u(c, atomicAdd(&counts[c], 1u));
+}
+
+var<workgroup> wsum: array<u32, 256>;
+@compute @workgroup_size(256) fn scan(@builtin(local_invocation_id) lid: vec3u) {
+  let t = lid.x;
+  let per = (P.cells + 255u) / 256u;
+  let s0 = t * per;
+  var acc = 0u;
+  for (var k = 0u; k < per; k++) { let c = s0 + k; if (c < P.cells) { acc += atomicLoad(&counts[c]); } }
+  wsum[t] = acc;
+  workgroupBarrier();
+  for (var off = 1u; off < 256u; off *= 2u) {
+    var v = 0u;
+    if (t >= off) { v = wsum[t - off]; }
+    workgroupBarrier();
+    wsum[t] += v;
+    workgroupBarrier();
+  }
+  var run = 0u;
+  if (t > 0u) { run = wsum[t - 1u]; }
+  for (var k = 0u; k < per; k++) {
+    let c = s0 + k;
+    if (c < P.cells) { offsets[c] = run; run += atomicLoad(&counts[c]); }
+  }
+}
+
+@compute @workgroup_size(64) fn scatter(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= P.n) { return; }
+  let c = cr[i];
+  sorted[offsets[c.x] + c.y] = i;
+}
+
+@compute @workgroup_size(64) fn density(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= P.n) { return; }
+  let pi = parts[i].pos;
+  let vi = parts[i].vel;
+  let c = cellOf(pi);
+  let h2 = P.h * P.h;
+  var rho = 0.0; var rhon = 0.0; var vs = vec2f(0.0); var ws = 0.0;
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let cc = c + vec2i(dx, dy);
+      if (cc.x < 0 || cc.y < 0 || cc.x >= i32(P.gridW) || cc.y >= i32(P.gridH)) { continue; }
+      let ci = cellIdx(cc);
+      let s0 = offsets[ci];
+      let s1 = s0 + atomicLoad(&counts[ci]);
+      for (var s = s0; s < s1; s++) {
+        let j = sorted[s];
+        let d = parts[j].pos - pi;
+        let r2 = dot(d, d);
+        if (r2 < h2) {
+          let q = 1.0 - sqrt(r2) / P.h;
+          rho += q * q;
+          rhon += q * q * q;
+          if (j != i) { vs += (parts[j].vel - vi) * q; ws += q; }
+        }
+      }
+    }
+  }
+  parts[i].dens = vec2f(rho, rhon);
+  parts[i].vdel = select(vec2f(0.0), vs / max(ws, 1e-4), ws > 0.0) * P.visc;
+}
+
+@compute @workgroup_size(64) fn relax(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= P.n) { return; }
+  let pi = parts[i].pos;
+  let Pi = P.k * (parts[i].dens.x - P.rho0);
+  let Pni = P.kn * parts[i].dens.y;
+  let c = cellOf(pi);
+  let h2 = P.h * P.h;
+  var disp = vec2f(0.0);
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let cc = c + vec2i(dx, dy);
+      if (cc.x < 0 || cc.y < 0 || cc.x >= i32(P.gridW) || cc.y >= i32(P.gridH)) { continue; }
+      let ci = cellIdx(cc);
+      let s0 = offsets[ci];
+      let s1 = s0 + atomicLoad(&counts[ci]);
+      for (var s = s0; s < s1; s++) {
+        let j = sorted[s];
+        if (j == i) { continue; }
+        let d = parts[j].pos - pi;
+        let r2 = dot(d, d);
+        if (r2 < h2 && r2 > 1e-6) {
+          let r = sqrt(r2);
+          let q = 1.0 - r / P.h;
+          let Pj = P.k * (parts[j].dens.x - P.rho0);
+          let Pnj = P.kn * parts[j].dens.y;
+          let D = (0.5 * (Pi + Pj) * q + 0.5 * (Pni + Pnj) * q * q) * P.h * 0.5;
+          disp -= D * (d / r) * 0.5;
+        }
+      }
+    }
+  }
+  let m = length(disp);
+  parts[i].out = pi + select(disp, disp * (P.h * 0.3 / m), m > P.h * 0.3);
+}
+
+@compute @workgroup_size(64) fn finalize(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= P.n) { return; }
+  var p = parts[i];
+  var x = p.out;
+  let rad = P.h * 0.2;
+  var touched = false;
+  // walls
+  let lo = vec2f(rad);
+  let hi = P.size - vec2f(rad);
+  if (x.x < lo.x || x.x > hi.x || x.y > hi.y) { touched = true; }
+  x = vec2f(clamp(x.x, lo.x, hi.x), min(x.y, hi.y));
+  // the page's tables are solid; liquid clings to them a little
+  var adh = vec2f(0.0);
+  for (var o = 0u; o < P.nObs; o++) {
+    let b = P.obs[o];
+    let q = clamp(x, b.xy, b.zw);
+    let d = x - q;
+    let dist = length(d);
+    if (dist < rad) {
+      if (dist > 1e-4) {
+        x = q + d / dist * rad;
+      } else {
+        // inside: leave by the nearest face
+        let dl = x.x - b.x; let dr = b.z - x.x; let dt = x.y - b.y; let db = b.w - x.y;
+        let m = min(min(dl, dr), min(dt, db));
+        if (m == dt) { x.y = b.y - rad; } else if (m == db) { x.y = b.w + rad; }
+        else if (m == dl) { x.x = b.x - rad; } else { x.x = b.z + rad; }
+      }
+      touched = true;
+    } else if (dist < P.h * 0.9) {
+      adh -= d / dist * (1.0 - dist / (P.h * 0.9));
+    }
+  }
+  var v = (x - p.prev) / P.dt + p.vdel + adh * P.adhesion * P.dt;
+  if (touched) { v *= 0.985; }
+  let sp = length(v);
+  if (sp > 1600.0) { v *= 1600.0 / sp; }
+  p.pos = x;
+  p.vel = v;
+  parts[i] = p;
+}
+`;
+
+const SPLAT = /* wgsl */ `${COMMON}
+struct R { size: vec2f, radius: f32, _p: f32 };
+@group(0) @binding(0) var<uniform> U: R;
+@group(0) @binding(1) var<storage, read> parts: array<Particle>;
+struct VO { @builtin(position) pos: vec4f, @location(0) c: vec2f, @location(1) speed: f32 };
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VO {
+  var corners = array<vec2f, 4>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(1.0, 1.0));
+  let c = corners[vi];
+  let w = parts[ii].pos + c * U.radius;
+  var o: VO;
+  o.pos = vec4f(w.x / U.size.x * 2.0 - 1.0, 1.0 - w.y / U.size.y * 2.0, 0.0, 1.0);
+  o.c = c;
+  o.speed = length(parts[ii].vel);
+  return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4f {
+  let d2 = dot(i.c, i.c);
+  if (d2 > 1.0) { discard; }
+  let w = exp(-d2 * 3.0) - 0.0498;
+  return vec4f(w, w * min(i.speed / 900.0, 1.0), 0.0, 0.0);
+}
+`;
+
+const COMPOSITE = /* wgsl */ `
+struct C { px: vec2f, fpx: vec2f, retro: f32, thresh: f32, dpr: f32, time: f32 };
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var field: texture_2d<f32>;
+@group(0) @binding(2) var bg: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> U: C;
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+  var p = array<vec2f, 3>(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+  return vec4f(p[vi], 0.0, 1.0);
+}
+fn F(uv: vec2f) -> vec2f { return textureSampleLevel(field, samp, uv, 0.0).rg; }
+fn B(uv: vec2f) -> vec3f { return textureSampleLevel(bg, samp, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).rgb; }
+const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let uv = fc.xy * U.px;
+  let fr = F(uv);
+  let f = fr.x;
+  let e = U.fpx * 1.5;
+  let gx = F(uv + vec2f(e.x, 0.0)).x - F(uv - vec2f(e.x, 0.0)).x;
+  let gy = F(uv + vec2f(0.0, e.y)).x - F(uv - vec2f(0.0, e.y)).x;
+  let t = U.thresh;
+
+  // cast shadow: the field, offset away from the light
+  let sh = smoothstep(t * 0.6, t * 2.0, F(uv - vec2f(-6.0, -9.0) * U.px * U.dpr).x);
+  var col = B(uv) * (1.0 - 0.22 * sh);
+
+  let inside = smoothstep(t - 0.12, t + 0.12, f);
+  if (inside > 0.0) {
+    let thick = clamp((f - t) / 2.2, 0.0, 1.0);
+    let n = normalize(vec3f(-gx * 2.2, -gy * 2.2, 1.0));
+    // refraction: the page bends through the liquid
+    let off = n.xy * (10.0 + 22.0 * thick) * U.dpr;
+    var base = B(uv + off * U.px);
+    // Beer–Lambert: thicker liquid swallows a little red
+    base *= exp(-thick * vec3f(0.55, 0.22, 0.10));
+    // Schlick Fresnel against a soft sky
+    let fres = 0.03 + 0.97 * pow(1.0 - n.z, 5.0);
+    let env = mix(vec3f(0.62, 0.70, 0.82), vec3f(1.0), clamp(-n.y * 0.5 + 0.5, 0.0, 1.0));
+    var liq = mix(base, env, clamp(fres * 1.6, 0.0, 1.0));
+    // two-lobe Blinn specular
+    let L = normalize(vec3f(-0.45, -0.65, 0.62));
+    let Hh = normalize(L + vec3f(0.0, 0.0, 1.0));
+    let nh = max(dot(n, Hh), 0.0);
+    liq += vec3f(pow(nh, 180.0) * 1.8 + pow(nh, 24.0) * 0.12);
+    // caustic: light focused just inside the far edge
+    liq += vec3f(0.18) * clamp(dot(n.xy, vec2f(0.45, 0.65)), 0.0, 1.0) * (1.0 - thick);
+    // meniscus: a thin darker line where it meets the page
+    let rim = 1.0 - smoothstep(t, t + 0.45, f);
+    liq *= 1.0 - 0.35 * rim;
+    // foam where it moves fast
+    liq = mix(liq, vec3f(1.0), clamp(fr.y / max(f, 1e-3), 0.0, 1.0) * 0.18);
+    col = mix(col, liq, inside);
+  }
+
+  if (U.retro > 0.5) {
+    let b = BAYER[(u32(fc.y) % 4u) * 4u + (u32(fc.x) % 4u)];
+    let th = (b + 0.5) / 16.0;
+    col = min(floor(clamp(col, vec3f(0.0), vec3f(1.0)) * 5.0 + th), vec3f(5.0)) / 5.0;
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+// ── pipelines ───────────────────────────────────────────────────────────────
+const simModule = device.createShaderModule({ code: SIM });
+const simLayout = device.createBindGroupLayout({
+  entries: [
+    { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+    ...[1, 2, 3, 4, 5].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })),
+  ],
+});
+const simPL = device.createPipelineLayout({ bindGroupLayouts: [simLayout] });
+const K = Object.fromEntries(
+  ['predict', 'clearCounts', 'count', 'scan', 'scatter', 'density', 'relax', 'finalize'].map((e) => [
+    e,
+    device.createComputePipeline({ layout: simPL, compute: { module: simModule, entryPoint: e } }),
+  ]),
+);
+
+const splatModule = device.createShaderModule({ code: SPLAT });
+const splatLayout = device.createBindGroupLayout({
+  entries: [
+    { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+    { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+  ],
+});
+const add = { srcFactor: 'one', dstFactor: 'one', operation: 'add' };
+const splatPipe = device.createRenderPipeline({
+  layout: device.createPipelineLayout({ bindGroupLayouts: [splatLayout] }),
+  vertex: { module: splatModule, entryPoint: 'vs' },
+  fragment: { module: splatModule, entryPoint: 'fs', targets: [{ format: 'rgba16float', blend: { color: add, alpha: add } }] },
+  primitive: { topology: 'triangle-strip' },
+});
+
+const compModule = device.createShaderModule({ code: COMPOSITE });
+const compPipe = device.createRenderPipeline({
+  layout: 'auto',
+  vertex: { module: compModule, entryPoint: 'vs' },
+  fragment: { module: compModule, entryPoint: 'fs', targets: [{ format }] },
+  primitive: { topology: 'triangle-list' },
+});
+const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+
+// ── the 1996 page we pour onto ──────────────────────────────────────────────
+function drawPage(W, Hh, dpr) {
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * dpr);
+  c.height = Math.round(Hh * dpr);
+  const g = c.getContext('2d');
+  g.scale(dpr, dpr);
+  // marble tile
+  const tile = document.createElement('canvas');
+  tile.width = tile.height = 128;
+  const tg = tile.getContext('2d');
+  const img = tg.createImageData(128, 128);
+  for (let y = 0; y < 128; y++)
+    for (let x = 0; x < 128; x++) {
+      const v = Math.sin((x + y) / 128 * Math.PI * 4 + Math.sin(x / 9) * 1.3 + Math.cos(y / 11) * 1.7 + Math.sin((x - y) / 23) * 2);
+      const q = 205 + 26 * v * v + (Math.random() * 6 - 3);
+      const i = (y * 128 + x) * 4;
+      img.data[i] = q * 0.975; img.data[i + 1] = q * 0.985; img.data[i + 2] = q; img.data[i + 3] = 255;
+    }
+  tg.putImageData(img, 0, 0);
+  g.fillStyle = g.createPattern(tile, 'repeat');
+  g.fillRect(0, 0, W, Hh);
+
+  const cx = W / 2;
+  const col = Math.min(640, W - 32);
+  const x0 = cx - col / 2;
+  const obs = [];
+  g.textAlign = 'center';
+  g.fillStyle = '#000080';
+  g.fillRect(x0, 14, col, 22);
+  g.fillStyle = '#FFFF00';
+  g.font = 'bold 14px "MS PGothic", sans-serif';
+  g.fillText('★☆★ ようこそ！ 高IQ団体 METIQ 公式ホームページへ ★☆★', cx, 30);
+
+  g.font = `bold italic ${Math.min(72, W / 7)}px "Times New Roman", serif`;
+  ['#FF0000', '#FF8C00', '#DAA520', '#008000', '#0000FF'].forEach((c, i, a) => {
+    g.fillStyle = c;
+    g.fillText('METIQ'[i], cx + (i - (a.length - 1) / 2) * Math.min(48, W / 10), 110);
+  });
+  g.fillStyle = '#000080';
+  g.font = 'bold 15px "MS PGothic", sans-serif';
+  g.fillText('～ 高IQ団体 OFFICIAL HOME PAGE ～', cx, 136);
+  const grad = g.createLinearGradient(x0 + 60, 0, x0 + col - 60, 0);
+  ['#f00', '#f80', '#ff0', '#0f0', '#0ff', '#00f', '#f0f'].forEach((c, i) => grad.addColorStop(i / 6, c));
+  g.fillStyle = grad;
+  g.fillRect(x0 + 60, 146, col - 120, 4);
+
+  const table = (tx, ty, tw, rows, head) => {
+    const rh = 26;
+    const th = rows.length * rh;
+    g.textAlign = 'left';
+    if (head) {
+      g.fillStyle = '#800000';
+      g.font = 'bold 17px "MS PGothic", sans-serif';
+      g.fillText(head, tx, ty - 10);
+    }
+    g.fillStyle = '#FFFFFF';
+    g.fillRect(tx, ty, tw, th);
+    g.strokeStyle = '#404040';
+    g.lineWidth = 2;
+    g.strokeRect(tx, ty, tw, th);
+    g.lineWidth = 1;
+    g.font = '13px "MS PGothic", sans-serif';
+    rows.forEach((r, i) => {
+      if (i) { g.beginPath(); g.moveTo(tx, ty + i * rh); g.lineTo(tx + tw, ty + i * rh); g.stroke(); }
+      g.fillStyle = '#000';
+      g.fillText(r[0], tx + 8, ty + i * rh + 18);
+      if (r[1]) {
+        g.beginPath(); g.moveTo(tx + 104, ty + i * rh); g.lineTo(tx + 104, ty + (i + 1) * rh); g.stroke();
+        g.fillText(r[1], tx + 112, ty + i * rh + 18);
+      }
+    });
+    obs.push([tx, ty, tx + tw, ty + th]);
+  };
+  table(x0, 196, Math.min(col * 0.72, col), [['2026.10.12', '公式ホームページをリニューアルしました！'], ['2026.10.12', 'アクセスカウンターを設置しました。']], '■ 新着情報 ■');
+
+  g.fillStyle = '#800000';
+  g.font = 'bold 17px "MS PGothic", sans-serif';
+  g.fillText('■ METIQとは ■', x0, 300);
+  g.fillStyle = '#000';
+  g.font = '14px "MS PGothic", sans-serif';
+  const para = '2016年現在、他の先進諸国に比べ、高IQ団体が極端に少ない日本。高いIQを持つ方々の交流の場は非常に限られています。「METIQ」は全人類の上位0.01%に入るIQを持つ方であれば誰でも入会することができます。';
+  let line = '';
+  let ly = 326;
+  for (const ch of para) {
+    if (g.measureText(line + ch).width > col - 24) { g.fillText(line, x0 + 24, ly); line = ''; ly += 21; }
+    line += ch;
+  }
+  g.fillText(line, x0 + 24, ly);
+
+  const tw2 = Math.min(300, col * 0.6);
+  table(x0 + col - tw2, ly + 40, tw2, [['IQ 156', 'SD 15 Wechsler'], ['IQ 160', 'SD 16 Stanford-Binet'], ['IQ 190', 'SD 24']], null);
+  return { canvas: c, obs };
+}
+
+// ── state ───────────────────────────────────────────────────────────────────
+let S = null;
+let retro = false;
+const mouse = { x: 0, y: 0, vx: 0, vy: 0, down: false, moved: 0, t: 0 };
+
+function lattice() {
+  // rest density of a square lattice at SPACING, measured with the same kernel
+  let r = 0;
+  for (let y = -3; y <= 3; y++)
+    for (let x = -3; x <= 3; x++) {
+      const d = Math.hypot(x, y) * SPACING;
+      if (d < H) r += (1 - d / H) ** 2;
+    }
+  return r;
+}
+const RHO0 = lattice();
+
+function build() {
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const W = innerWidth;
+  const Hh = innerHeight;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(Hh * dpr);
+  ctx.configure({ device, format, alphaMode: 'opaque' });
+
+  const n = Number(QS.get('n')) || Math.max(3000, Math.min(14000, Math.round((W * Hh) / 95)));
+  const gridW = Math.ceil(W / H) + 1;
+  const gridH = Math.ceil(Hh / H) + 1;
+  const cells = gridW * gridH;
+
+  const mk = (size, usage) => device.createBuffer({ size, usage });
+  const ST = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+  const parts = mk(n * STRIDE * 4, ST);
+  const cr = mk(n * 8, ST);
+  const counts = mk(cells * 4, ST);
+  const offsets = mk(cells * 4, ST);
+  const sorted = mk(n * 4, ST);
+  const params = mk(256, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const simBG = device.createBindGroup({
+    layout: simLayout,
+    entries: [params, parts, cr, counts, offsets, sorted].map((buffer, binding) => ({ binding, resource: { buffer } })),
+  });
+
+  const page = drawPage(W, Hh, dpr);
+  const bgTex = device.createTexture({
+    size: [canvas.width, canvas.height],
+    format: 'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  device.queue.copyExternalImageToTexture({ source: page.canvas }, { texture: bgTex }, [canvas.width, canvas.height]);
+
+  const FW = Math.ceil(canvas.width / 2);
+  const FH = Math.ceil(canvas.height / 2);
+  const field = device.createTexture({ size: [FW, FH], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+  const splatU = mk(16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  device.queue.writeBuffer(splatU, 0, new Float32Array([W, Hh, H * 0.95, 0]));
+  const splatBG = device.createBindGroup({ layout: splatLayout, entries: [{ binding: 0, resource: { buffer: splatU } }, { binding: 1, resource: { buffer: parts } }] });
+  const compU = mk(32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const compBG = device.createBindGroup({
+    layout: compPipe.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: sampler },
+      { binding: 1, resource: field.createView() },
+      { binding: 2, resource: bgTex.createView() },
+      { binding: 3, resource: { buffer: compU } },
+    ],
+  });
+
+  S = { W, Hh, dpr, n, gridW, gridH, cells, parts, params, simBG, field, splatBG, compBG, compU, obs: page.obs.slice(0, MAX_OBS), next: 0 };
+  // start with a heavy blob over the logo, keep the rest for pouring
+  const blob = Math.round(n * 0.55);
+  spawn(W * 0.5, 40 + Math.sqrt(blob) * SPACING * 0.5, 0, 120, blob);
+}
+
+/** Write `count` particles as a dense disc at (x, y) moving with (vx, vy). */
+function spawn(x, y, vx, vy, count) {
+  const { n } = S;
+  count = Math.min(count, n);
+  const buf = new Float32Array(count * STRIDE);
+  for (let k = 0; k < count; k++) {
+    const r = Math.sqrt(k + 0.5) * SPACING * 0.56;
+    const a = k * 2.399963;
+    const px = Math.min(S.W - 4, Math.max(4, x + Math.cos(a) * r));
+    const py = Math.min(S.Hh - 4, Math.max(4, y + Math.sin(a) * r));
+    buf.set([px, py, px - vx * DT, py - vy * DT, vx, vy, px, py, 0, 0, 0, 0], k * STRIDE);
+  }
+  // ring buffer: the oldest liquid is recycled
+  const first = Math.min(count, n - S.next);
+  device.queue.writeBuffer(S.parts, S.next * STRIDE * 4, buf, 0, first * STRIDE);
+  if (first < count) device.queue.writeBuffer(S.parts, 0, buf, first * STRIDE, (count - first) * STRIDE);
+  S.next = (S.next + count) % n;
+}
+
+function writeParams() {
+  const f = new Float32Array(64);
+  const u = new Uint32Array(f.buffer);
+  f.set([S.W, S.Hh, H, RHO0, 0.42, 0.9, DT, 1400], 0);
+  f[8] = 0.08; u[9] = S.n; u[10] = S.gridW; u[11] = S.gridH;
+  f.set([mouse.x, mouse.y, mouse.vx, mouse.vy], 12);
+  f[16] = 46; f[17] = mouse.down && mouse.moved > 4 ? 1 : 0; u[18] = S.obs.length; u[19] = S.cells;
+  f[20] = 900;
+  S.obs.forEach((o, i) => f.set(o, 24 + i * 4));
+  device.queue.writeBuffer(S.params, 0, f);
+}
+
+// ── frame ───────────────────────────────────────────────────────────────────
+let last = performance.now();
+let fps = 60;
+function frame(now) {
+  const dt = (now - last) / 1000;
+  last = now;
+  fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
+  mouse.vx *= 0.85;
+  mouse.vy *= 0.85;
+  writeParams();
+  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, retro ? 1 : 0, 0.55, S.dpr, now / 1000]));
+
+  const enc = device.createCommandEncoder();
+  const cp = enc.beginComputePass();
+  cp.setBindGroup(0, S.simBG);
+  const pg = Math.ceil(S.n / 64);
+  const cg = Math.ceil(S.cells / 64);
+  for (let s = 0; s < SUBSTEPS; s++) {
+    for (const [k, g] of [['predict', pg], ['clearCounts', cg], ['count', pg], ['scan', 1], ['scatter', pg], ['density', pg], ['relax', pg], ['finalize', pg]]) {
+      cp.setPipeline(K[k]);
+      cp.dispatchWorkgroups(g);
+    }
+  }
+  cp.end();
+
+  const sp = enc.beginRenderPass({ colorAttachments: [{ view: S.field.createView(), loadOp: 'clear', clearValue: [0, 0, 0, 0], storeOp: 'store' }] });
+  sp.setPipeline(splatPipe);
+  sp.setBindGroup(0, S.splatBG);
+  sp.draw(4, S.n);
+  sp.end();
+
+  const rp = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }] });
+  rp.setPipeline(compPipe);
+  rp.setBindGroup(0, S.compBG);
+  rp.draw(3);
+  rp.end();
+  device.queue.submit([enc.finish()]);
+
+  stat.textContent = `${S.n.toLocaleString()}粒 / ${fps.toFixed(0)} fps`;
+  requestAnimationFrame(frame);
+}
+
+// ── input ───────────────────────────────────────────────────────────────────
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  Object.assign(mouse, { x: e.clientX, y: e.clientY, down: true, moved: 0, vx: 0, vy: 0, t: e.timeStamp });
+});
+canvas.addEventListener('pointermove', (e) => {
+  const dt = Math.max(1, e.timeStamp - mouse.t) / 1000;
+  mouse.vx = (e.clientX - mouse.x) / dt;
+  mouse.vy = (e.clientY - mouse.y) / dt;
+  if (mouse.down) mouse.moved += Math.hypot(e.clientX - mouse.x, e.clientY - mouse.y);
+  Object.assign(mouse, { x: e.clientX, y: e.clientY, t: e.timeStamp });
+});
+const up = () => {
+  if (mouse.down && mouse.moved < 6) spawn(mouse.x, mouse.y, 0, 60, Math.round(S.n * 0.06));
+  mouse.down = false;
+};
+canvas.addEventListener('pointerup', up);
+canvas.addEventListener('pointercancel', () => (mouse.down = false));
+$('#pour').addEventListener('click', () => spawn(S.W * (0.25 + 0.5 * Math.random()), 30, 0, 200, Math.round(S.n * 0.12)));
+$('#reset').addEventListener('click', build);
+$('#retro').addEventListener('click', (e) => {
+  retro = !retro;
+  e.currentTarget.setAttribute('aria-pressed', String(retro));
+});
+let rt = 0;
+addEventListener('resize', () => {
+  clearTimeout(rt);
+  rt = setTimeout(build, 200);
+});
+
+build();
+requestAnimationFrame(frame);
+</script>
