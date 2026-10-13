@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>METIQ Liquid Lab</title>
 <meta name="description" content="WebGPU compute-shader liquid flowing over a 1996 home page">
 <style>
@@ -233,7 +235,7 @@ var<workgroup> wsum: array<u32, 256>;
     }
   }
   let m = length(disp);
-  parts[i].out = pi + select(disp, disp * (P.h * 0.3 / m), m > P.h * 0.3);
+  parts[i].out = pi + select(disp, disp * (P.h * 0.15 / m), m > P.h * 0.15);
 }
 
 @compute @workgroup_size(64) fn finalize(@builtin(global_invocation_id) id: vec3u) {
@@ -313,7 +315,8 @@ struct C { px: vec2f, fpx: vec2f, retro: f32, thresh: f32, dpr: f32, time: f32 }
   return vec4f(p[vi], 0.0, 1.0);
 }
 fn F(uv: vec2f) -> vec2f { return textureSampleLevel(field, samp, uv, 0.0).rg; }
-fn B(uv: vec2f) -> vec3f { return textureSampleLevel(bg, samp, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).rgb; }
+// mirror at the frame edge so refraction never smears the last row
+fn B(uv: vec2f) -> vec3f { let m = 1.0 - abs(1.0 - abs(uv)); return textureSampleLevel(bg, samp, m, 0.0).rgb; }
 const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
 @fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
   let uv = fc.xy * U.px;
@@ -328,19 +331,20 @@ const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.
   let sh = smoothstep(t * 0.6, t * 2.0, F(uv - vec2f(-6.0, -9.0) * U.px * U.dpr).x);
   var col = B(uv) * (1.0 - 0.22 * sh);
 
-  let inside = smoothstep(t - 0.12, t + 0.12, f);
+  let inside = smoothstep(t - 0.18, t + 0.18, f);
   if (inside > 0.0) {
-    let thick = clamp((f - t) / 2.2, 0.0, 1.0);
-    let n = normalize(vec3f(-gx * 2.2, -gy * 2.2, 1.0));
+    let thick = clamp((f - t) / 4.0, 0.0, 1.0);
+    let n = normalize(vec3f(-gx * 1.1, -gy * 1.1, 1.0));
     // refraction: the page bends through the liquid
     let off = n.xy * (10.0 + 22.0 * thick) * U.dpr;
     var base = B(uv + off * U.px);
     // Beer–Lambert: thicker liquid swallows a little red
-    base *= exp(-thick * vec3f(0.55, 0.22, 0.10));
+    base *= exp(-thick * vec3f(0.28, 0.10, 0.04));
     // Schlick Fresnel against a soft sky
     let fres = 0.03 + 0.97 * pow(1.0 - n.z, 5.0);
-    let env = mix(vec3f(0.62, 0.70, 0.82), vec3f(1.0), clamp(-n.y * 0.5 + 0.5, 0.0, 1.0));
-    var liq = mix(base, env, clamp(fres * 1.6, 0.0, 1.0));
+    let env = mix(vec3f(0.78, 0.84, 0.92), vec3f(1.0), clamp(-n.y * 0.5 + 0.5, 0.0, 1.0));
+    // thin films and tiny drops barely reflect – no white pearls
+    var liq = mix(base, env, clamp(fres * (0.3 + 0.7 * smoothstep(t, t + 1.5, f)), 0.0, 1.0));
     // two-lobe Blinn specular
     let L = normalize(vec3f(-0.45, -0.65, 0.62));
     let Hh = normalize(L + vec3f(0.0, 0.0, 1.0));
@@ -349,8 +353,8 @@ const BAYER = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.
     // caustic: light focused just inside the far edge
     liq += vec3f(0.18) * clamp(dot(n.xy, vec2f(0.45, 0.65)), 0.0, 1.0) * (1.0 - thick);
     // meniscus: a thin darker line where it meets the page
-    let rim = 1.0 - smoothstep(t, t + 0.45, f);
-    liq *= 1.0 - 0.35 * rim;
+    let rim = 1.0 - smoothstep(t, t + 0.35, f);
+    liq *= 1.0 - 0.16 * rim;
     // foam where it moves fast
     liq = mix(liq, vec3f(1.0), clamp(fr.y / max(f, 1e-3), 0.0, 1.0) * 0.18);
     col = mix(col, liq, inside);
@@ -555,7 +559,7 @@ function build() {
   const FH = Math.ceil(canvas.height / 2);
   const field = device.createTexture({ size: [FW, FH], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
   const splatU = mk(16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  device.queue.writeBuffer(splatU, 0, new Float32Array([W, Hh, H * 0.95, 0]));
+  device.queue.writeBuffer(splatU, 0, new Float32Array([W, Hh, H * 1.25, 0]));
   const splatBG = device.createBindGroup({ layout: splatLayout, entries: [{ binding: 0, resource: { buffer: splatU } }, { binding: 1, resource: { buffer: parts } }] });
   const compU = mk(32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const compBG = device.createBindGroup({
@@ -596,7 +600,7 @@ function spawn(x, y, vx, vy, count) {
 function writeParams() {
   const f = new Float32Array(64);
   const u = new Uint32Array(f.buffer);
-  f.set([S.W, S.Hh, H, RHO0, 0.42, 0.9, DT, 1400], 0);
+  f.set([S.W, S.Hh, H, RHO0, 0.16, 0.4, DT, 1400], 0);
   f[8] = 0.08; u[9] = S.n; u[10] = S.gridW; u[11] = S.gridH;
   f.set([mouse.x, mouse.y, mouse.vx, mouse.vy], 12);
   f[16] = 46; f[17] = mouse.down && mouse.moved > 4 ? 1 : 0; u[18] = S.obs.length; u[19] = S.cells;
@@ -615,7 +619,7 @@ function frame(now) {
   mouse.vx *= 0.85;
   mouse.vy *= 0.85;
   writeParams();
-  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, retro ? 1 : 0, 0.55, S.dpr, now / 1000]));
+  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, retro ? 1 : 0, 0.9, S.dpr, now / 1000]));
 
   const enc = device.createCommandEncoder();
   const cp = enc.beginComputePass();
