@@ -68,6 +68,7 @@ struct Plan {
     impact: V2,
     sky: f32,
     origin: V2,
+    zoom: f32,
     seed: u32,
     t0: f32,
     tau: f32,
@@ -88,6 +89,7 @@ static PL: Slot<Plan> = Slot::new(Plan {
     impact: (0.0, 0.0),
     sky: 0.0,
     origin: (0.0, 0.0),
+    zoom: 1.0,
     seed: 0,
     t0: 0.0,
     tau: 0.0,
@@ -309,8 +311,10 @@ fn strips(p: &mut Plan, rng: &mut Pcg) {
     p.ne = 0;
 }
 
-/// Plan an event. `sky` = element's top edge in viewport px (bolts and
-/// meteors come from above the viewport). (ox, oy) = element's page origin.
+/// Plan an event. Sizes are in the element's own CSS px; `sky` = its top edge
+/// in the same units (bolts and meteors come from above the viewport).
+/// (ox, oy) = its page origin in *document* px, and `zoom` the CSS zoom in
+/// between, so glyph rest positions (document px) map into local space.
 #[no_mangle]
 pub extern "C" fn destroy_plan(
     mode: u32,
@@ -325,6 +329,7 @@ pub extern "C" fn destroy_plan(
     g0: u32,
     g1: u32,
     t: f32,
+    zoom: f32,
 ) -> u32 {
     destroy_cancel();
     let p = PL.get();
@@ -336,6 +341,7 @@ pub extern "C" fn destroy_plan(
     p.impact = (ix, iy);
     p.sky = sky;
     p.origin = (ox, oy);
+    p.zoom = max(zoom, 0.05);
     p.seed = seed;
     p.t0 = t;
     p.tau = 0.0;
@@ -668,7 +674,7 @@ pub extern "C" fn destroy_step(t: f32) -> u32 {
     let ext = field::ext();
     for i in p.g.0..p.g.1 {
         let (gx, gy) = field::pos(i);
-        let (lx, ly) = (gx - p.origin.0, gy - p.origin.1);
+        let (lx, ly) = ((gx - p.origin.0) / p.zoom, (gy - p.origin.1) / p.zoom);
         let v = match stage {
             0 => 0.0,
             3 => {

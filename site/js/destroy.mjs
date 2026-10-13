@@ -62,14 +62,19 @@ export class Destroyer {
     if (mode < 0) do mode = (Math.random() * MODES.length) | 0; while (mode === this.lastMode);
     this.mode = this.lastMode = mode;
 
+    // Everything below lives in the element's own CSS px ("local"). When the
+    // page is shown scaled (CSS zoom on <body>, e.g. on a phone), local px ×
+    // z = document px; vx()/vy() take local points to the viewport.
+    const z = parseFloat(document.body.style.zoom) || 1;
+    this.z = z;
     const r = el.getBoundingClientRect();
     const gs = el.querySelectorAll('.g');
     const g0 = gs.length ? this.field.index.get(gs[0]) : 0;
     const g1 = gs.length ? this.field.index.get(gs[gs.length - 1]) + 1 : 0;
-    const ix = r.width * (0.2 + 0.6 * Math.random());
-    const iy = r.height * (0.2 + 0.6 * Math.random());
-    const box = { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height };
-    this.n = this.k.x.destroy_plan(mode, box.w, box.h, ix, iy, r.top, box.x, box.y, (Math.random() * 2 ** 32) >>> 0, g0, g1, t);
+    const box = { x: (r.left + scrollX) / z, y: (r.top + scrollY) / z, w: r.width / z, h: r.height / z };
+    const ix = box.w * (0.2 + 0.6 * Math.random());
+    const iy = box.h * (0.2 + 0.6 * Math.random());
+    this.n = this.k.x.destroy_plan(mode, box.w, box.h, ix, iy, r.top / z, r.left + scrollX, r.top + scrollY, (Math.random() * 2 ** 32) >>> 0, g0, g1, t, z);
     this.el = this.lastEl = el;
     this.box = box;
     this.impact = { x: ix, y: iy };
@@ -119,6 +124,14 @@ export class Destroyer {
       host.append(tc);
     }
     document.body.append(host);
+  }
+
+  vx(lx) {
+    return (this.box.x + lx) * this.z - scrollX;
+  }
+
+  vy(ly) {
+    return (this.box.y + ly) * this.z - scrollY;
   }
 
   /** Swap the element for one clipped clone per piece. */
@@ -210,8 +223,7 @@ export class Destroyer {
     }
     c.clearRect(0, 0, this.arc.width, this.arc.height);
     this.arc.hidden = !n && !meteor && !ring;
-    const ox = this.box.x - scrollX;
-    const oy = this.box.y - scrollY;
+    const z = this.z;
     c.globalCompositeOperation = 'lighter';
     c.lineJoin = c.lineCap = 'round';
 
@@ -226,19 +238,19 @@ export class Destroyer {
       for (let i = 0; i < n; i++) {
         const b = 1 + i * LINE;
         const [w, col, k] = STYLES[L[b]][pass];
-        c.lineWidth = w;
+        c.lineWidth = w * Math.max(z, 0.6);
         c.strokeStyle = col.replace('%', (L[b + 1] * k).toFixed(3));
         c.beginPath();
-        c.moveTo(L[b + 3] + ox, L[b + 4] + oy);
-        for (let p = 1; p < L[b + 2]; p++) c.lineTo(L[b + 3 + p * 2] + ox, L[b + 4 + p * 2] + oy);
+        c.moveTo(this.vx(L[b + 3]), this.vy(L[b + 4]));
+        for (let p = 1; p < L[b + 2]; p++) c.lineTo(this.vx(L[b + 3 + p * 2]), this.vy(L[b + 4 + p * 2]));
         c.stroke();
       }
     }
 
     if (meteor) {
-      const mx = fx[8] + ox;
-      const my = fx[9] + oy;
-      const r = fx[10];
+      const mx = this.vx(fx[8]);
+      const my = this.vy(fx[9]);
+      const r = fx[10] * z;
       const g = c.createRadialGradient(mx, my, 0, mx, my, r * 3.2);
       g.addColorStop(0, 'rgb(255 255 230 / 1)');
       g.addColorStop(0.25, 'rgb(255 210 80 / .95)');
@@ -256,12 +268,12 @@ export class Destroyer {
     }
 
     if (ring) {
-      const cx = this.impact.x + ox;
-      const cy = this.impact.y + oy;
-      c.lineWidth = this.mode === 3 ? 6 : 2;
+      const cx = this.vx(this.impact.x);
+      const cy = this.vy(this.impact.y);
+      c.lineWidth = (this.mode === 3 ? 6 : 2) * z;
       c.strokeStyle = this.mode === 3 ? `rgb(255 220 160 / ${fx[12].toFixed(3)})` : `rgb(200 220 255 / ${fx[12].toFixed(3)})`;
       c.beginPath();
-      c.ellipse(cx, cy, fx[11], fx[11] * 0.55, 0, 0, Math.PI * 2);
+      c.ellipse(cx, cy, fx[11] * z, fx[11] * z * 0.55, 0, 0, Math.PI * 2);
       c.stroke();
     }
     c.globalCompositeOperation = 'source-over';
@@ -312,8 +324,6 @@ export class Destroyer {
     if (!this.pieces) this.burst();
     const o = this.out;
     const pl = this.polys;
-    const ox = this.box.x - scrollX;
-    const oy = this.box.y - scrollY;
     const hack = this.mode === 4;
     this.pieces.forEach((wrap, i) => {
       const b = i * OUT;
@@ -328,8 +338,8 @@ export class Destroyer {
       s.filter = hack ? 'drop-shadow(0 0 2px #00ff66) brightness(1.2)' : `brightness(${o[b + 5].toFixed(2)})`;
       if (o[b + 6] && !this.released[i]) {
         this.released[i] = 1;
-        const cx = pl[pb + 1] + ox;
-        const cy = pl[pb + 2] + oy;
+        const cx = this.vx(pl[pb + 1]);
+        const cy = this.vy(pl[pb + 2]);
         x.spark_emit(cx, cy, (Math.random() - 0.5) * 300, -100 - Math.random() * 200, this.mode === 1 ? 4 : 2, DEBRIS[this.mode]);
         if (this.mode === 3 || this.mode === 2) x.spark_emit(cx, cy, 0, -60, 1, 10);
       }

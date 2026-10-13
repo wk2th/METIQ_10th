@@ -104,6 +104,8 @@ async function main() {
     ptr.drag = true;
     if (e.target.dataset?.surface === 'counter') x.odo_kick(30);
     if (e.target.dataset?.surface === 'logo') x.logo_kick(9);
+    // phones have no hover: a tap (or a finger dragged across text) infects
+    if (e.pointerType !== 'mouse' && !reduced.matches && e.target.classList?.contains('g')) field.touch(e.target);
   });
   addEventListener('pointerup', () => (ptr.drag = false));
   addEventListener('scroll', () => (ptr.speed = Math.max(ptr.speed, 600)), { passive: true });
