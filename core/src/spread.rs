@@ -211,6 +211,31 @@ pub fn start(src: usize, t: f32) -> u32 {
     reached
 }
 
+/// Closest indexed glyph to document point (x, y) within `maxd` (≤ one
+/// cell), or -1. Used for touches, which land between glyphs as often as on
+/// them.
+pub fn nearest(x: f32, y: f32, maxd: f32) -> i32 {
+    let g = G.get();
+    let maxd = min(maxd, CELL);
+    let (cx, cy) = (floor(x / CELL) as i32, floor(y / CELL) as i32);
+    let mut best = (maxd * maxd, -1i32);
+    for oy in -1..=1 {
+        for ox in -1..=1 {
+            let mut v = g.head[bucket(cx + ox, cy + oy)];
+            while v != 0 {
+                let vi = (v - 1) as usize;
+                v = g.next[vi];
+                let (dx, dy) = (g.x[vi] - x, g.y[vi] - y);
+                let d2 = dx * dx + dy * dy;
+                if d2 < best.0 {
+                    best = (d2, vi as i32);
+                }
+            }
+        }
+    }
+    best.1
+}
+
 pub fn clear() {
     let ev = E.get();
     if S.get().ready {

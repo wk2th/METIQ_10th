@@ -126,6 +126,28 @@ export class GlyphField {
     return true;
   }
 
+  /**
+   * A finger at document point (x, y). Each touch id keeps its own trail, so
+   * several fingers infect independently; a finger re-infects once it has
+   * moved a couple of characters. Returns true if text was hit.
+   */
+  touchAt(id, x, y) {
+    const i = this.k.x.field_nearest(x, y, 36);
+    if (i < 0) return false;
+    this.trails ??= new Map();
+    const last = this.trails.get(id);
+    const gx = this.inp[i * IN];
+    const gy = this.inp[i * IN + 1];
+    if (last && Math.hypot(gx - last.x, gy - last.y) < Math.max(24, this.box[i * 2] * 1.8)) return true;
+    this.trails.set(id, { x: gx, y: gy });
+    this.k.x.field_spread(i, this.t);
+    return true;
+  }
+
+  touchEnd(id) {
+    this.trails?.delete(id);
+  }
+
   step(dt, t, energy) {
     this.t = t;
     const nd = this.k.x.field_step(this.n, dt, t, energy);

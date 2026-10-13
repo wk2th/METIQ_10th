@@ -12,6 +12,7 @@
 import { boot } from './kernel.mjs';
 import { GlyphField } from './glyphs.mjs';
 import { Destroyer } from './destroy.mjs';
+import { TouchFx } from './touch.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
@@ -53,6 +54,7 @@ async function main() {
   installBackground(k);
   const field = new GlyphField(k, document.body);
   const destroyer = new Destroyer(k, field);
+  const touchFx = new TouchFx(k, field, () => t, () => reduced.matches);
   const { list: surfaces, byName } = mountSurfaces(k);
   const overlay = new Overlay(k);
 
@@ -70,6 +72,7 @@ async function main() {
   const calm = () => {
     x.fx_calm(2.5);
     destroyer.restore();
+    touchFx.calm();
     field.calm();
     overlay.calm();
     document.body.classList.remove('glitch');
@@ -104,8 +107,6 @@ async function main() {
     ptr.drag = true;
     if (e.target.dataset?.surface === 'counter') x.odo_kick(30);
     if (e.target.dataset?.surface === 'logo') x.logo_kick(9);
-    // phones have no hover: a tap (or a finger dragged across text) infects
-    if (e.pointerType !== 'mouse' && !reduced.matches && e.target.classList?.contains('g')) field.touch(e.target);
   });
   addEventListener('pointerup', () => (ptr.drag = false));
   addEventListener('scroll', () => (ptr.speed = Math.max(ptr.speed, 600)), { passive: true });
@@ -151,6 +152,7 @@ async function main() {
     wasGlitch = glitch;
 
     if (!reduced.matches) destroyer.step(t);
+    touchFx.step(dt);
     field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);

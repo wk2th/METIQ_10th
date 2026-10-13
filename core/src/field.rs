@@ -153,6 +153,26 @@ pub extern "C" fn field_index(n: u32) {
     crate::spread::index(&F.get().inp, IN, n);
 }
 
+/// Nearest glyph to document point (x, y) within `maxd` px, or -1.
+#[no_mangle]
+pub extern "C" fn field_nearest(x: f32, y: f32, maxd: f32) -> i32 {
+    crate::spread::nearest(x, y, maxd)
+}
+
+/// A codepoint from the decode pools, for free-floating glyph particles:
+/// stage 0 mojibake, 1 greek, 2 maths; `wide` picks full-width variants.
+#[no_mangle]
+pub extern "C" fn field_glyph(stage: u32, wide: u32, h: u32) -> u32 {
+    let h = hash32(h);
+    match (stage, wide != 0) {
+        (0, true) => pick(&MOJI_WIDE, h),
+        (0, false) => pick(&MOJI_NARROW, h),
+        (1, true) => pick(&GREEK_WIDE, h),
+        (1, false) => pick(&GREEK_NARROW, h),
+        _ => pick(&MATHS, h),
+    }
+}
+
 /// Infect glyph `i` at time `t`. Returns how many glyphs the spread reaches.
 #[no_mangle]
 pub extern "C" fn field_spread(i: u32, t: f32) -> u32 {

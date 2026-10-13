@@ -66,3 +66,14 @@ canvas[data-surface="globe"]:active { cursor: grabbing; }
 }
 #flash[hidden] { display: none; }
 @media print { #flash { display: none !important; } }
+
+#touchfx {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 2147483644;
+}
+#touchfx[hidden] { display: none; }
+@media print { #touchfx { display: none !important; } }
