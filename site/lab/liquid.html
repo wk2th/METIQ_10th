@@ -194,7 +194,8 @@ var<workgroup> wsum: array<u32, 256>;
 @compute @workgroup_size(64) fn relax(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x; if (i >= P.n) { return; }
   let pi = parts[i].pos;
-  let Pi = P.k * (parts[i].dens.x - P.rho0);
+  // clamp the negative side: almost no cohesive pull, so water runs instead of beading
+  let Pi = P.k * max(parts[i].dens.x - P.rho0, -0.04 * P.rho0);
   let Pni = P.kn * parts[i].dens.y;
   let c = cellOf(pi);
   let h2 = P.h * P.h;
@@ -214,7 +215,7 @@ var<workgroup> wsum: array<u32, 256>;
         if (r2 < h2 && r2 > 1e-6) {
           let r = sqrt(r2);
           let q = 1.0 - r / P.h;
-          let Pj = P.k * (parts[j].dens.x - P.rho0);
+          let Pj = P.k * max(parts[j].dens.x - P.rho0, -0.04 * P.rho0);
           let Pnj = P.kn * parts[j].dens.y;
           let D = (0.5 * (Pi + Pj) * q + 0.5 * (Pni + Pnj) * q * q) * P.h * 0.5;
           disp -= D * (d / r) * 0.5;
@@ -260,7 +261,7 @@ var<workgroup> wsum: array<u32, 256>;
     }
   }
   var v = (x - p.prev) / P.dt + p.vdel + adh * P.adhesion * P.dt;
-  if (touched) { v *= 0.985; }
+  if (touched) { v *= 0.996; }
   let sp = length(v);
   if (sp > 1600.0) { v *= 1600.0 / sp; }
   p.pos = x;
@@ -325,7 +326,7 @@ fn B(px: vec2f) -> vec3f {
   let inside = smoothstep(t - 0.18, t + 0.18, f);
   if (inside > 0.0) {
     let thick = clamp((f - t) / 4.0, 0.0, 1.0);
-    let n = normalize(vec3f(-gx * 1.1, -gy * 1.1, 1.0));
+    let n = normalize(vec3f(-gx * 0.8, -gy * 0.8, 1.0));
     // refraction: the page bends through the liquid
     let off = n.xy * (10.0 + 22.0 * thick) * U.dpr;
     var base = B(fc.xy + off);
@@ -577,11 +578,11 @@ function rain(dt, t) {
 function writeParams() {
   const f = new Float32Array(128);
   const u = new Uint32Array(f.buffer);
-  f.set([S.W, S.PH, H, RHO0, 0.16, 0.4, DT, 1400], 0);
-  f[8] = 0.08; u[9] = S.active; u[10] = S.gridW; u[11] = S.gridH;
+  f.set([S.W, S.PH, H, RHO0, 0.18, 0.18, DT, 1400], 0);
+  f[8] = 0.015; u[9] = S.active; u[10] = S.gridW; u[11] = S.gridH;
   f.set([mouse.x, mouse.y + scrollY, mouse.vx, mouse.vy], 12);
   f[16] = 46; f[17] = mouse.down && mouse.moved > 4 ? 1 : 0; u[18] = S.obs.length; u[19] = S.cells;
-  f[20] = 900;
+  f[20] = 250;
   S.obs.forEach((o, i) => f.set(o, 24 + i * 4));
   device.queue.writeBuffer(S.params, 0, f);
 }
@@ -601,7 +602,7 @@ function frame(now) {
   mouse.vx *= 0.85;
   mouse.vy *= 0.85;
   writeParams();
-  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, 1 / S.bgW, 1 / S.bgH, scrollY * S.dpr, 0.9, S.dpr, 0, 0, 0]));
+  device.queue.writeBuffer(S.compU, 0, new Float32Array([1 / canvas.width, 1 / canvas.height, 1 / S.field.width, 1 / S.field.height, 1 / S.bgW, 1 / S.bgH, scrollY * S.dpr, 0.75, S.dpr, 0, 0, 0]));
   device.queue.writeBuffer(S.splatU, 0, new Float32Array([S.W, S.Hh, H * 1.25, scrollY]));
 
   const enc = device.createCommandEncoder();
