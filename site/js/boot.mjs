@@ -6,6 +6,7 @@
 //                                          ├─► crt_render   (noise overlay)
 //                                          ├─► *_render     (GIF surfaces)
 //                                          └─► fx_glitch    (tear events)
+//   near an object ──► life_*  (membrane, breath, fibrillation, droplets)
 //   ~10 s ──► destroy_*       (electric / rust / lightning / meteor / hack, re-form)
 //   capture precursor ──► fx_calm + DOM reset, synchronously
 
@@ -13,6 +14,7 @@ import { boot } from './kernel.mjs';
 import { GlyphField } from './glyphs.mjs';
 import { Destroyer } from './destroy.mjs';
 import { TouchFx } from './touch.mjs';
+import { Life } from './life.mjs';
 import { mountSurfaces, installBackground } from './surfaces.mjs';
 import { Overlay } from './overlay.mjs';
 import { armStealth } from './stealth.mjs';
@@ -55,6 +57,7 @@ async function main() {
   const field = new GlyphField(k, document.body);
   const destroyer = new Destroyer(k, field);
   const touchFx = new TouchFx(k, field, () => t, () => reduced.matches);
+  const life = new Life(k, (el) => destroyer.el === el);
   const { list: surfaces, byName } = mountSurfaces(k);
   const overlay = new Overlay(k);
 
@@ -73,6 +76,7 @@ async function main() {
     x.fx_calm(2.5);
     destroyer.restore();
     touchFx.calm();
+    life.calm();
     field.calm();
     overlay.calm();
     document.body.classList.remove('glitch');
@@ -153,6 +157,7 @@ async function main() {
 
     if (!reduced.matches) destroyer.step(t);
     touchFx.step(dt);
+    if (!reduced.matches) life.step(dt, t, energy);
     field.step(dt, t, energy);
     overlay.frame(dt, t, energy, glitch);
     for (const s of surfaces) s.tick(dt, t, energy);

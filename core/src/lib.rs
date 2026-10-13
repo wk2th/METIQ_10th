@@ -16,6 +16,7 @@
 //! ----------
 //! * [`field`]    – per-glyph springs and the mojibake decode ripples
 //! * [`spread`]   – corruption spread as first-passage percolation
+//! * [`life`]     – objects breathe, fibrillate and drip like cells
 //! * [`destroy`]  – electric / rust / lightning / meteor / hack destruction
 //! * [`crt`]      – SIMD signal noise, scanlines, tear bands
 //! * [`odometer`] – the access counter (true carry-propagating drum)
@@ -42,6 +43,7 @@ mod fx;
 mod field;
 mod spread;
 mod destroy;
+mod life;
 mod crt;
 mod odometer;
 mod globe;
